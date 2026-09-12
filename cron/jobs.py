@@ -33,6 +33,27 @@ from typing import Optional, Dict, List, Any, Callable, Set, Tuple, Union, Colle
 
 logger = logging.getLogger(__name__)
 
+
+def _is_named_profile_path(path: Path) -> bool:
+    """True if *path* is under ``<hermes_home>/profiles/<name>/``.
+
+    Defined before job-store initialization because split cron modules can need
+    the directory helper while this module is still being imported.
+    """
+    with contextlib.suppress(OSError, RuntimeError):
+        if "profiles" in path.resolve().parts:
+            return True
+    return "profiles" in path.parts
+
+
+def _ensure_cron_dir(cron_dir: Path) -> None:
+    """Create a cron directory without resurrecting a deleted profile home."""
+    if _is_named_profile_path(cron_dir):
+        cron_dir.mkdir(exist_ok=True)
+        return
+    cron_dir.mkdir(parents=True, exist_ok=True)
+
+
 from hermes_time import now as _hermes_now
 from utils import atomic_replace, atomic_write_text
 
@@ -558,24 +579,6 @@ def _preserve_file_ownership(path: Path, before: Optional[os.stat_result]) -> No
             "be locked out (see issue #68483).",
             path, before.st_uid, before.st_gid, e)
 
-
-def _is_named_profile_path(path: Path) -> bool:
-    """True if *path* is under ``<hermes_home>/profiles/<name>/`` (default/custom homes are not).
-    Checks the resolved path (symlinked parents) and the raw path (symlinked profile homes)."""
-    with contextlib.suppress(OSError, RuntimeError):
-        if "profiles" in path.resolve().parts:
-            return True
-    return "profiles" in path.parts
-
-
-def _ensure_cron_dir(cron_dir: Path) -> None:
-    """Create a cron directory without resurrecting a deleted profile home: a stale multiplex
-    scheduler may still hold a deleted profile's path, so named profiles use ``parents=False`` and
-    fail closed. Default/custom homes keep ``parents=True`` so first-run creation works."""
-    if _is_named_profile_path(cron_dir):
-        cron_dir.mkdir(exist_ok=True)
-        return
-    cron_dir.mkdir(parents=True, exist_ok=True)
 
 
 def ensure_dirs():
