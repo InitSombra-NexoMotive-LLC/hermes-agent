@@ -19,9 +19,21 @@ import sys
 import threading
 import time
 from cron.env_settings import cron_env_setting
-from cron.jobs import _ensure_cron_dir
 from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
+
+
+def _ensure_cron_dir(cron_dir: Path) -> None:
+    """Late-bind the jobs helper to avoid a split-module import cycle.
+
+    ``cron.scheduler`` imports this module while other scheduler paths can still
+    be importing ``cron.jobs``. Importing the private helper at module load time
+    can therefore observe a partially initialized jobs module. The helper is
+    only needed when a script actually runs, after jobs initialization completes.
+    """
+    from cron.jobs import _ensure_cron_dir as ensure
+
+    ensure(cron_dir)
 
 from hermes_cli._subprocess_compat import windows_hide_flags
 
