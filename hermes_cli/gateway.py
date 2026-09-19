@@ -6381,10 +6381,50 @@ def _cmd_migrate(args):
     cmd_migrate(args)
 
 
+def _worker_control_registry():
+    from gateway.worker_session_registry import WorkerSessionRegistry
+    return WorkerSessionRegistry(Path(os.environ.get("HERMES_GITHUB_CONTROL_DB", get_hermes_home() / "github-control.sqlite3")))
+
+
+def _print_worker_identity_status(status: dict) -> None:
+    print(f"worker_id: {status['worker_id']}")
+    print(f"workstream: {status['workstream']}")
+    print(f"configured fingerprint: {status['configured_fingerprint']}")
+    print(f"observed fingerprint: {status['observed_fingerprint']}")
+    print(f"match: {'YES' if status['match'] else 'NO'}")
+    print(f"observed during most recent bind attempt: {'YES' if status['observed_during_recent_bind_attempt'] else 'NO'}")
+    print(f"observation timestamp: {status['observation_timestamp'] or 'NONE'}")
+
+
+def _cmd_worker_control(args):
+    if getattr(args, "worker_control_command", None) != "identity":
+        return
+    worker_id, workstream = getattr(args, "worker_id", None), getattr(args, "workstream", None)
+    if worker_id != "nvidia-control" or workstream != "CONTROL_PLANE":
+        print_error("Only nvidia-control / CONTROL_PLANE is permitted by this gateway.")
+        raise SystemExit(2)
+    registry = _worker_control_registry()
+    action = getattr(args, "worker_control_identity_command", None)
+    if action == "status":
+        _print_worker_identity_status(registry.identity_status(worker_id, workstream)); return
+    if action == "observe":
+        print(registry.start_identity_observation(worker_id, workstream, ttl=600)); return
+    if action == "confirm-observed":
+        status = registry.identity_status(worker_id, workstream); _print_worker_identity_status(status)
+        if not status["observation_timestamp"]:
+            print_error("No confirmable trusted identity observation exists."); raise SystemExit(2)
+        if not prompt_yes_no("Confirm observed Telegram identity for nvidia-control?", False):
+            print("Identity replacement cancelled; protected configuration unchanged."); return
+        try: _print_worker_identity_status(registry.confirm_observed_identity(worker_id, workstream))
+        except Exception as exc:
+            print_error(f"Identity replacement rejected: {exc}"); raise SystemExit(2)
+
+
 _GATEWAY_SUBCOMMANDS = {
     None: _cmd_run, "run": _cmd_run, "setup": _cmd_setup, "install": _cmd_install,
     "uninstall": _cmd_uninstall, "start": _cmd_start, "stop": _cmd_stop, "restart": _cmd_restart,
     "status": _cmd_status, "list": _cmd_list, "migrate-legacy": _cmd_migrate_legacy, "migrate": _cmd_migrate,
+    "worker-control": _cmd_worker_control,
 }
 
 

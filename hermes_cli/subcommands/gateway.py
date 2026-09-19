@@ -119,6 +119,15 @@ def build_gateway_parser(
 
     gateway_subparsers.add_parser("setup", help="Configure messaging platforms")
 
+    worker_control = gateway_subparsers.add_parser("worker-control", help="Local trusted worker-control administration")
+    worker_control_sub = worker_control.add_subparsers(dest="worker_control_command", required=True)
+    identity = worker_control_sub.add_parser("identity", help="Inspect or confirm protected Telegram identity")
+    identity_sub = identity.add_subparsers(dest="worker_control_identity_command", required=True)
+    for action in ("status", "observe", "confirm-observed"):
+        command = identity_sub.add_parser(action)
+        command.add_argument("--worker", dest="worker_id", required=True)
+        command.add_argument("--workstream", required=True)
+
     gateway_migrate_legacy = gateway_subparsers.add_parser(
         "migrate-legacy", help="Remove legacy hermes.service units from pre-rename installs",
         description="Stop, disable, and remove legacy Hermes gateway unit files "

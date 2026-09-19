@@ -1218,10 +1218,19 @@ class GatewayInboundMixin:
             from pathlib import Path
             from gateway.worker_session_registry import WorkerSessionRegistry
             _bind_db = os.environ.get("HERMES_GITHUB_CONTROL_DB")
-            if _bind_db and WorkerSessionRegistry(Path(_bind_db)).try_consume(
-                "nvidia-control", event.text, source.chat_id, _quick_key
-            ):
-                return "NVIDIA worker session bootstrap accepted."
+            if _bind_db:
+                _registry = WorkerSessionRegistry(Path(_bind_db))
+                if _registry.try_consume("nvidia-control", event.text, source.chat_id, _quick_key):
+                    return "NVIDIA worker session bootstrap accepted."
+                if _registry.try_consume_identity_observation(
+                    "nvidia-control", "CONTROL_PLANE", event.text, source.chat_id
+                ):
+                    return "NVIDIA Telegram identity observation accepted."
+                # Exact challenge from a non-configured identity is trusted
+                # observation evidence only; it never changes configuration or binds.
+                _registry.record_failed_bind_observation(
+                    "nvidia-control", "CONTROL_PLANE", event.text, source.chat_id
+                )
         _reply = await self._hm_pending_reply_intercepts(event, source, _quick_key)
         if _reply is not None:
             return _reply
