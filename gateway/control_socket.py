@@ -210,7 +210,11 @@ class GatewayControlServer:
                 response: dict[str, Any] = {"ok": False, "error": f"unknown verb: {verb!r}",
                                             "protocol": CONTROL_PROTOCOL_VERSION, "supported_verbs": sorted(self._handlers)}
             else:
-                response = {"ok": True, "protocol": CONTROL_PROTOCOL_VERSION, "result": handler()}
+                # Built-in liveness verbs take no payload; authenticated ingress
+                # handlers receive the validated JSON request.
+                import inspect
+                result = handler(request) if inspect.signature(handler).parameters else handler()
+                response = {"ok": True, "protocol": CONTROL_PROTOCOL_VERSION, "result": result}
         except Exception as exc:
             response = {"ok": False, "error": f"{type(exc).__name__}: {exc}", "protocol": CONTROL_PROTOCOL_VERSION}
         if request_id is not None:

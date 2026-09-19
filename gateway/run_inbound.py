@@ -1208,7 +1208,20 @@ class GatewayInboundMixin:
         if _paused_notice is not None:
             return _paused_notice
 
-        _quick_key = self._session_key_for_source(source)
+        # Only the gateway-owned GitHub factory can select a persistent session;
+        # externally supplied metadata is never trusted for routing.
+        from gateway.github_control_event import trusted_override
+        _quick_key = trusted_override(event) or self._session_key_for_source(source)
+        # One-time worker binding consumes only an exact Telegram bootstrap
+        # challenge after canonical routing has supplied this session key.
+        if source.platform is Platform.TELEGRAM:
+            from pathlib import Path
+            from gateway.worker_session_registry import WorkerSessionRegistry
+            _bind_db = os.environ.get("HERMES_GITHUB_CONTROL_DB")
+            if _bind_db and WorkerSessionRegistry(Path(_bind_db)).try_consume(
+                "nvidia-control", event.text, source.chat_id, _quick_key
+            ):
+                return "NVIDIA worker session bootstrap accepted."
         _reply = await self._hm_pending_reply_intercepts(event, source, _quick_key)
         if _reply is not None:
             return _reply
