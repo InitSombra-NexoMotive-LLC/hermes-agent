@@ -5131,9 +5131,26 @@ async def _start_gateway_start_control_socket(runner):
             except concurrent.futures.TimeoutError:
                 return {"multiplex": True, "pending": True, "served_profiles": runner.served_profile_names()}
 
+        def _submit_command_handler(request: dict) -> dict:
+            # Control-socket handlers run off-loop; schedule onto the gateway's
+            # owned loop and let _handle_message retain its normal FIFO policy.
+            from pathlib import Path
+            from gateway.github_control import CommandLedger, SubmitCommand
+            from gateway.worker_session_registry import WorkerSessionRegistry
+            state_path = Path(os.environ.get("HERMES_GITHUB_CONTROL_DB", str(Path.home() / ".hermes" / "github-control.sqlite3")))
+            registry = WorkerSessionRegistry(state_path)
+            ledger = CommandLedger(state_path)
+            def _schedule(event, delivered):
+                async def _deliver():
+                    delivered()
+                    await runner._handle_message(event)
+                asyncio.run_coroutine_threadsafe(_deliver(), _main_loop)
+            return SubmitCommand(ledger, registry, _schedule).submit(request)
+
         _control_server = GatewayControlServer(
             verb_handlers={"pause-for-update": _pause_for_update_handler,
-                           "rescan-profiles": _rescan_profiles_handler})
+                           "rescan-profiles": _rescan_profiles_handler,
+                           "submit-command": _submit_command_handler})
         if not await _control_server.start():
             _control_server = None
         else:
