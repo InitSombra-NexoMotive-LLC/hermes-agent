@@ -40,7 +40,7 @@ def test_poll_resumes_pending_after_transport_validation(tmp_path,monkeypatch):
  pending=command('pending');relay.save('pending','b'*40,'DISCOVERED',pending);relay.save('pending','b'*40,'SUBMITTED',pending)
  with relay.db() as d:d.execute("INSERT INTO relay_meta VALUES('head',?)",(sha,))
  trace=[];monkeypatch.setattr(relay,'prepare',lambda:trace.append('fetch') or sha);monkeypatch.setattr(relay,'ancestor',lambda a,b:trace.append('ancestry') or True)
- statuses=[{'status':'OK','state':'RUNNING'},{'status':'OK','state':'COMPLETED','command_id':'pending','worker_id':'nvidia-control','workstream':'CONTROL_PLANE','reason':None,'created_at':'t','updated_at':'t','completed_at':'t','sanitized_result':'safe','result_digest':'digest','result_truncated':False}]
+ statuses=[{'status':'OK','state':'RUNNING','command_id':'pending','worker_id':'nvidia-control','workstream':'CONTROL_PLANE','created_at':'t','updated_at':'t','result_truncated':False},{'status':'OK','state':'COMPLETED','command_id':'pending','worker_id':'nvidia-control','workstream':'CONTROL_PLANE','reason':None,'created_at':'t','updated_at':'t','completed_at':'t','sanitized_result':'safe','result_digest':'8b3369944dd2a3fab39e32d1aeb1f763946a458ae3e6368a46432adc8f3a0860','result_truncated':False}]
  def request(payload):trace.append(payload['verb']);return statuses.pop(0)
  published=[];relay.socket.request=request;monkeypatch.setattr(relay,'publish',lambda *args:trace.append('publish') or published.append(args) or 'p'*40)
  assert relay.poll_once()==[] and relay.row('pending')[1]=='SUBMITTED' and trace.index('ancestry')<trace.index('command-status') and 'submit-command' not in trace and 'publish' not in trace

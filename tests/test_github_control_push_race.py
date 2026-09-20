@@ -31,7 +31,7 @@ def test_next_poll_validates_fast_forward_before_publish(tmp_path):
   def request(self,payload):
    trace.append(payload['verb']+':'+payload['command_id'])
    if payload['verb']=='submit-command':return {'status':'ACCEPTED'}
-   return {'status':'OK','state':'RUNNING'}
+   return {'status':'OK','state':'RUNNING','command_id':payload['command_id'],'worker_id':'nvidia-control','workstream':'CONTROL_PLANE','created_at':'t','updated_at':'t','result_truncated':False}
  relay.socket=Sock();original=relay.publish
  relay.publish=lambda command_id,value:trace.append('publish') or original(command_id,value)
  assert relay.poll_once()==['race'] and relay.row('race')[1]=='PUBLISHED' and relay.row('later')[1]=='SUBMITTED'

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import socket
 import subprocess
@@ -18,7 +19,7 @@ class Socket:
  def __init__(self): self.submits=0
  def request(self, payload):
   if payload["verb"] == "submit-command": self.submits += 1; return {"status":"ACCEPTED"}
-  return {"status":"OK","command_id":payload["command_id"],"state":"COMPLETED","sanitized_result":"safe","result_digest":"digest","result_truncated":False,"created_at":"t","updated_at":"t","completed_at":"t","reason":None,"worker_id":"nvidia-control","workstream":"CONTROL_PLANE","payload":"must-not-publish"}
+  return {"status":"OK","command_id":payload["command_id"],"state":"COMPLETED","sanitized_result":"safe","result_digest":"8b3369944dd2a3fab39e32d1aeb1f763946a458ae3e6368a46432adc8f3a0860","result_truncated":False,"created_at":"t","updated_at":"t","completed_at":"t","reason":None,"worker_id":"nvidia-control","workstream":"CONTROL_PLANE","payload":"must-not-publish"}
 
 def git(*args, cwd=None): return subprocess.run(["git",*args], cwd=cwd, check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
 
@@ -57,7 +58,7 @@ def test_actual_unix_socket_framing_and_response_validation(tmp_path):
  thread.join()
  with pytest.raises(RelayError): UnixSocketClient(str(tmp_path/'missing'),timeout=.01).request({'verb':'command-status'})
 
-def recovery_relay(tmp_path,status='PENDING'):
+def recovery_relay(tmp_path,status='RUNNING'):
  class RecoverySocket(Socket):
   def request(self,payload):
    if payload['verb']=='submit-command':self.submits+=1;return {'status':'DUPLICATE'}

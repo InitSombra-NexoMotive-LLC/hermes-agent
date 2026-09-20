@@ -1,6 +1,6 @@
 """Fail-closed STATUS-only GitHub control relay; command text is never executed."""
 from __future__ import annotations
-import json, logging, os, re, socket, sqlite3, subprocess, time
+import hashlib, json, logging, os, re, socket, sqlite3, subprocess, time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -102,9 +102,17 @@ class StatusRelay:
  def result(self,command_id):
   status=self.socket.request({'verb':'command-status','command_id':command_id})
   if status.get('status')!='OK': raise RelayError('STATUS_UNAVAILABLE')
-  if status.get('state') not in {'COMPLETED','FAILED'}: return None
-  if status.get('command_id')!=command_id or status.get('worker_id')!='nvidia-control' or status.get('workstream')!='CONTROL_PLANE' or not isinstance(status.get('result_truncated'),(bool,int)) or not isinstance(status.get('sanitized_result'),(str,type(None))) or not isinstance(status.get('result_digest'),(str,type(None))): raise RelayError('STATUS_INVALID_RESPONSE')
-  return {k:status.get(k) for k in SAFE_RESULT}
+  states={'ACCEPTED','QUEUED','RUNNING','DELIVERED','COMPLETED','FAILED'}
+  if status.get('command_id')!=command_id or status.get('worker_id')!='nvidia-control' or status.get('workstream')!='CONTROL_PLANE' or status.get('state') not in states: raise RelayError('STATUS_INVALID_RESPONSE')
+  truncated=status.get('result_truncated')
+  if not isinstance(truncated,(bool,int)) or truncated not in {False,True,0,1} or not isinstance(status.get('created_at'),str) or not status['created_at'] or not isinstance(status.get('updated_at'),str) or not status['updated_at']: raise RelayError('STATUS_INVALID_RESPONSE')
+  if status['state'] not in {'COMPLETED','FAILED'}: return None
+  if status['state']=='COMPLETED':
+   summary,digest=status.get('sanitized_result'),status.get('result_digest')
+   if not isinstance(summary,str) or len(summary)>4096 or not isinstance(digest,str) or not re.fullmatch(r'[0-9a-f]{64}',digest) or hashlib.sha256(summary.encode()).hexdigest()!=digest or not isinstance(status.get('completed_at'),str) or not status['completed_at'] or status.get('reason') not in {None,''}: raise RelayError('STATUS_INVALID_RESPONSE')
+  else:
+   if status.get('reason') not in {'EXECUTION_FAILED','RESULT_SANITIZATION_FAILED','RESULT_PERSISTENCE_FAILED','INVALID_LIFECYCLE_STATE','SCHEDULING_FAILED'} or status.get('sanitized_result') is not None or status.get('result_digest') is not None or status.get('completed_at') is not None: raise RelayError('STATUS_INVALID_RESPONSE')
+  clean={k:status.get(k) for k in SAFE_RESULT};clean['result_truncated']=bool(truncated);return clean
  def publish(self,command_id,result):
   target=self.c.workspace/'control-inbox/results'/f'{command_id}.json'
   if target.exists(): raise RelayError('RESULT_EXISTS')
