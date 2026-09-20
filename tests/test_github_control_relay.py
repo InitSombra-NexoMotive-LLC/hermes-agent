@@ -56,3 +56,22 @@ def test_actual_unix_socket_framing_and_response_validation(tmp_path):
  assert UnixSocketClient(path,timeout=1).request({'verb':'submit-command'})=={'status':'ACCEPTED'}
  thread.join()
  with pytest.raises(RelayError): UnixSocketClient(str(tmp_path/'missing'),timeout=.01).request({'verb':'command-status'})
+
+def recovery_relay(tmp_path,status='PENDING'):
+ class RecoverySocket(Socket):
+  def request(self,payload):
+   if payload['verb']=='submit-command':self.submits+=1;return {'status':'DUPLICATE'}
+   return {'status':'OK','state':status,'command_id':payload['command_id'],'worker_id':'nvidia-control','workstream':'CONTROL_PLANE','reason':None,'created_at':'t','updated_at':'t','completed_at':'t','sanitized_result':'safe','result_digest':'digest','result_truncated':False}
+ work=tmp_path/'work';work.mkdir();git('init',cwd=work);git('remote','add','origin',str(tmp_path/'unused.git'),cwd=work)
+ c=RelayConfig(remote=str(tmp_path/'unused.git'),branch='control/nvidia-command-inbox',trusted_head='a'*40,workspace=work,state_db=tmp_path/'state.db')
+ return StatusRelay(c,RecoverySocket(),lambda _:{}),command()
+def test_pending_status_resumes_without_new_transport_commit(tmp_path):
+ relay,data=recovery_relay(tmp_path);relay.save(data['command_id'],'c'*40,'DISCOVERED',data);assert relay.resume(data['command_id'],'c'*40,data) is False;assert relay.row(data['command_id'])[1]=='SUBMITTED'
+def test_restart_from_discovered_without_new_transport_commit(tmp_path):
+ relay,data=recovery_relay(tmp_path);relay.save(data['command_id'],'c'*40,'DISCOVERED',data);assert relay.resume(data['command_id'],'c'*40,data) is False
+def test_restart_from_submitted_without_new_transport_commit(tmp_path):
+ relay,data=recovery_relay(tmp_path);relay.save(data['command_id'],'c'*40,'DISCOVERED',data);relay.save(data['command_id'],'c'*40,'SUBMITTED',data);assert relay.resume(data['command_id'],'c'*40,data) is False
+def test_restart_from_result_ready_without_new_transport_commit(tmp_path,monkeypatch):
+ relay,data=recovery_relay(tmp_path);result={'command_id':data['command_id'],'state':'COMPLETED'};relay.save(data['command_id'],'c'*40,'DISCOVERED',data);relay.save(data['command_id'],'c'*40,'SUBMITTED',data);relay.save(data['command_id'],'c'*40,'RESULT_READY',data,result=result);monkeypatch.setattr(relay,'publish',lambda *_:'p'*40);assert relay.resume(data['command_id'],'c'*40,data) is True and relay.row(data['command_id'])[1]=='PUBLISHED'
+def test_published_command_is_not_executed_twice(tmp_path):
+ relay,data=recovery_relay(tmp_path);relay.save(data['command_id'],'c'*40,'DISCOVERED',data);relay.save(data['command_id'],'c'*40,'SUBMITTED',data);relay.save(data['command_id'],'c'*40,'RESULT_READY',data,result={'command_id':data['command_id']});relay.save(data['command_id'],'c'*40,'PUBLISHED',data,published='p'*40);assert relay.resume(data['command_id'],'c'*40,data) is False and relay.socket.submits==0

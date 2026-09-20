@@ -65,7 +65,10 @@ class StatusRelay:
  def row(self,command_id):
   with self.db() as d:return d.execute('SELECT source_commit,lifecycle,command_json,result_json,published_commit,reason FROM relay_commands WHERE command_id=?',(command_id,)).fetchone()
  def save(self,command_id,commit,state,data,result=None,published=None,reason=None):
+  legal={'DISCOVERED':{'SUBMITTED','FAILED'},'SUBMITTED':{'RESULT_READY','FAILED'},'RESULT_READY':{'PUBLISHED','FAILED'},'PUBLISHED':set(),'FAILED':set()}
   with self.db() as d:
+   current=d.execute('SELECT lifecycle,source_commit FROM relay_commands WHERE command_id=?',(command_id,)).fetchone()
+   if current and (current[1]!=commit or (state!=current[0] and state not in legal[current[0]])): raise RelayError('INVALID_LIFECYCLE_STATE')
    d.execute('INSERT INTO relay_commands(command_id,source_commit,lifecycle,command_json,result_json,published_commit,reason) VALUES(?,?,?,?,?,?,?) ON CONFLICT(command_id) DO UPDATE SET lifecycle=excluded.lifecycle,result_json=COALESCE(excluded.result_json,relay_commands.result_json),published_commit=COALESCE(excluded.published_commit,relay_commands.published_commit),reason=COALESCE(excluded.reason,relay_commands.reason)',(command_id,commit,state,json.dumps(data,sort_keys=True),json.dumps(result,sort_keys=True) if result else None,published,reason))
  def result(self,command_id):
   status=self.socket.request({'verb':'command-status','command_id':command_id})
@@ -103,11 +106,15 @@ class StatusRelay:
   return False
  def poll_once(self):
   head=self.prepare()
+  resumed=[]
+  with self.db() as d: pending=d.execute("SELECT command_id,source_commit,command_json FROM relay_commands WHERE lifecycle IN ('DISCOVERED','SUBMITTED','RESULT_READY')").fetchall(); row=d.execute("SELECT value FROM relay_meta WHERE key='head'").fetchone()
+  for command_id,commit,raw in pending:
+   if self.resume(command_id,commit,json.loads(raw)): resumed.append(command_id)
   with self.db() as d: row=d.execute("SELECT value FROM relay_meta WHERE key='head'").fetchone()
   base=row[0] if row else self.c.trusted_head
   if not self.ancestor(self.c.trusted_head,head): raise RelayError('UNTRUSTED_TRANSPORT_HEAD')
   if not self.ancestor(base,head): raise RelayError('TRANSPORT_HISTORY_CHANGED')
-  commits=([head] if not row and base==head else self.git('rev-list','--reverse',f'{base}..{head}').splitlines()); done=[]
+  commits=([head] if not row and base==head else self.git('rev-list','--reverse',f'{base}..{head}').splitlines()); done=resumed
   for commit in commits:
    changes=self.changes(commit); commands=[p for s,p in changes if p.startswith('control-inbox/commands/')]
    if not commands:
