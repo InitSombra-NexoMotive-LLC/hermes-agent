@@ -23,6 +23,10 @@ class CommandLedger:
   t=datetime.now(timezone.utc).isoformat()
   with self._db() as d:r=d.execute('UPDATE github_control_commands SET state=?,sanitized_result=?,result_digest=?,result_truncated=?,completed_at=?,updated_at=? WHERE command_id=? AND state=?',('COMPLETED',result['summary'],result['digest'],int(result['truncated']),t,t,id,'DELIVERED'));return r.rowcount==1
  def fail(self,id,reason):return self.transition(id,'FAILED',('ACCEPTED','QUEUED','RUNNING','DELIVERED'))
- def state(self,id):
+ def status(self,id):
   with self._db() as d:
-   r=d.execute('SELECT state FROM github_control_commands WHERE command_id=?',(id,)).fetchone();return r[0] if r else None
+   r=d.execute('SELECT command_id,worker_id,workstream,state,reason,created_at,updated_at,completed_at,sanitized_result,result_digest,result_truncated FROM github_control_commands WHERE command_id=?',(id,)).fetchone()
+  if not r:return None
+  return dict(zip(('command_id','worker_id','workstream','state','reason','created_at','updated_at','completed_at','sanitized_result','result_digest','result_truncated'),r))
+ def state(self,id):
+  s=self.status(id);return s['state'] if s else None

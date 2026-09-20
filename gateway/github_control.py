@@ -9,22 +9,7 @@ from gateway.worker_session_registry import BindError
 ALLOWED={"STATUS","CONTINUE","RECOVER","RECHECK","START_TASK","PAUSE","RESUME","STOP_AFTER_SAFE_POINT"};REQUIRED={"command_id","source","worker_id","workstream","task_id","command_type","instructions"}
 class CommandError(ValueError):pass
 def now():return datetime.now(timezone.utc).isoformat()
-class CommandLedger:
- def __init__(self,path:Path):
-  self.path=Path(path);self.path.parent.mkdir(parents=True,exist_ok=True)
-  with self._connect() as db:
-   db.execute("CREATE TABLE IF NOT EXISTS github_control_commands(command_id TEXT PRIMARY KEY,state TEXT NOT NULL,payload TEXT NOT NULL,reason TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)")
-   columns={r[1] for r in db.execute('PRAGMA table_info(github_control_commands)')}
-   for name,kind in {'worker_id':'TEXT','workstream':'TEXT','completed_at':'TEXT','sanitized_result':'TEXT','result_digest':'TEXT','result_truncated':'INTEGER NOT NULL DEFAULT 0'}.items():
-    if name not in columns:db.execute(f'ALTER TABLE github_control_commands ADD COLUMN {name} {kind}')
- def _connect(self):return sqlite3.connect(self.path,timeout=5)
- def state(self,id):
-  with self._connect() as db:
-   r=db.execute('SELECT state FROM github_control_commands WHERE command_id=?',(id,)).fetchone();return r[0] if r else None
- def record(self,p,state,reason=None):
-  with self._connect() as db:
-   prior=db.execute('SELECT created_at FROM github_control_commands WHERE command_id=?',(p['command_id'],)).fetchone()
-   db.execute('INSERT OR REPLACE INTO github_control_commands VALUES(?,?,?,?,?,?)',(p['command_id'],state,json.dumps(p),reason,prior[0] if prior else now(),now()))
+from gateway.github_control_ledger import CommandLedger
 class SubmitCommand:
  def __init__(self,ledger,registry,schedule:Callable):self.ledger,self.registry,self.schedule=ledger,registry,schedule
  def submit(self,p:dict[str,Any]):
@@ -34,6 +19,8 @@ class SubmitCommand:
   if self.ledger.state(p['command_id']) in {'ACCEPTED','QUEUED','RUNNING','DELIVERED','COMPLETED','FAILED'}:return {'command_id':p['command_id'],'status':'DUPLICATE'}
   try:event=build_worker_control_event(self.registry,p)
   except BindError as e:return {'command_id':p['command_id'],'status':str(e)}
-  self.ledger.record(p,'ACCEPTED')
-  try:self.schedule(event,p,self.ledger);self.ledger.record(p,'QUEUED');return {'command_id':p['command_id'],'status':'ACCEPTED','accepted_at':now()}
-  except Exception:self.ledger.record(p,'FAILED','SCHEDULING_FAILED');return {'command_id':p['command_id'],'status':'SCHEDULING_FAILED'}
+  self.ledger.accept(p)
+  try:
+   if not self.ledger.transition(p['command_id'],'QUEUED',('ACCEPTED',)):raise RuntimeError()
+   self.schedule(event,p,self.ledger);return {'command_id':p['command_id'],'status':'ACCEPTED','accepted_at':now()}
+  except Exception:self.ledger.fail(p['command_id'],'SCHEDULING_FAILED');return {'command_id':p['command_id'],'status':'SCHEDULING_FAILED'}

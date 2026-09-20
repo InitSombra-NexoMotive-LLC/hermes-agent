@@ -5142,13 +5142,19 @@ async def _start_gateway_start_control_socket(runner):
             ledger = CommandLedger(state_path)
             def _schedule(event, command, ledger):
                 async def _deliver():
-                    ledger.record(command, "RUNNING")
+                    ledger.transition(command['command_id'], "RUNNING", ("QUEUED",))
                     try:
-                        ledger.record(command, "DELIVERED")
-                        await runner._handle_message(event)
-                        ledger.record(command, "COMPLETED")
+                        ledger.transition(command['command_id'], "DELIVERED", ("RUNNING",))
+                        result = await runner._handle_message(event)
+                        from gateway.github_control_sanitize import sanitize_result
+                        if not ledger.complete(command['command_id'], sanitize_result(result)):
+                            ledger.fail(command['command_id'], 'RESULT_PERSISTENCE_FAILED')
+                            raise RuntimeError('RESULT_PERSISTENCE_FAILED')
+                    except ValueError:
+                        ledger.fail(command['command_id'], 'RESULT_SANITIZATION_FAILED')
+                        raise
                     except Exception as exc:
-                        ledger.record(command, "FAILED", type(exc).__name__)
+                        ledger.fail(command['command_id'], type(exc).__name__)
                         raise
                 future = asyncio.run_coroutine_threadsafe(_deliver(), _main_loop)
                 def _observe(done):
@@ -5159,10 +5165,21 @@ async def _start_gateway_start_control_socket(runner):
                 future.add_done_callback(_observe)
             return SubmitCommand(ledger, registry, _schedule).submit(request)
 
+        def _command_status_handler(request: dict) -> dict:
+            import re
+            command_id = request.get("command_id")
+            if not isinstance(command_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", command_id):
+                return {"status": "INVALID"}
+            from gateway.github_control_ledger import CommandLedger
+            state_path = Path(os.environ.get("HERMES_GITHUB_CONTROL_DB", str(Path.home() / ".hermes" / "github-control.sqlite3")))
+            result = CommandLedger(state_path).status(command_id)
+            return {"status": "NOT_FOUND"} if result is None else {"status": "OK", **result}
+
         _control_server = GatewayControlServer(
             verb_handlers={"pause-for-update": _pause_for_update_handler,
                            "rescan-profiles": _rescan_profiles_handler,
-                           "submit-command": _submit_command_handler})
+                           "submit-command": _submit_command_handler,
+                           "command-status": _command_status_handler})
         if not await _control_server.start():
             _control_server = None
         else:
