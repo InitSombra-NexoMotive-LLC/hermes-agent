@@ -6,6 +6,10 @@ The relay accepts only signed-by-API `STATUS` command commits on `control/nvidia
 
 Create `/home/rodrigo/.config/hermes/github-control-relay.json` mode `0600` with non-secret paths and the pinned initial transport SHA. GitHub authentication is inherited from the existing `gh` credential manager; do not put credentials in this file or unit.
 
+## Required configuration and recovery
+
+The mode-0600 JSON configuration requires `remote`, `branch`, `trusted_head`, `workspace`, `state_db`, and `gateway_socket`; optional bounded `timeout`, `retries`, and `poll_seconds` control retry behavior. The workspace must be empty or a Git repository whose `origin` exactly matches `remote`. The relay freezes with a permanent integrity exit code on history, actor, schema, or workspace integrity failures; investigate and reset only with a newly verified transport history. Temporary GitHub or Unix-socket outages are retried on later polls without deleting state. Rollback never deletes the audit state database or transport workspace.
+
 ## Install (not performed by this candidate)
 
 1. Copy `systemd/hermes-github-control-relay.service` to `~/.config/systemd/user/`.

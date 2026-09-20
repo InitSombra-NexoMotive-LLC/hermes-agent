@@ -1,10 +1,12 @@
 import json
+import socket
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
 
-from gateway.github_control_relay import RelayConfig, StatusRelay
+from gateway.github_control_relay import RelayConfig, RelayError, StatusRelay, UnixSocketClient
 
 
 TRUSTED = "a" * 40
@@ -38,3 +40,18 @@ def test_end_to_end_command_publish_and_restart(tmp_path):
 def test_schema_rejections(tmp_path,patch):
  data=command(); data.update(patch)
  with pytest.raises(ValueError): StatusRelay.validate_command(data)
+
+
+def test_actual_unix_socket_framing_and_response_validation(tmp_path):
+ path=str(tmp_path/'socket')
+ server=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); server.bind(path); server.listen(1)
+ def serve():
+  conn,_=server.accept()
+  with conn:
+   assert conn.makefile('rb').readline().endswith(b'\n')
+   conn.sendall(b'{"ok":true,"protocol":1,"result":{"status":"ACCEPTED"}}\n')
+  server.close()
+ thread=threading.Thread(target=serve); thread.start()
+ assert UnixSocketClient(path,timeout=1).request({'verb':'submit-command'})=={'status':'ACCEPTED'}
+ thread.join()
+ with pytest.raises(RelayError): UnixSocketClient(str(tmp_path/'missing'),timeout=.01).request({'verb':'command-status'})

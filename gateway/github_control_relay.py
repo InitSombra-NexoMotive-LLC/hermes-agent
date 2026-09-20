@@ -1,8 +1,14 @@
 """Fail-closed STATUS-only Git transport relay; never executes command text."""
 from __future__ import annotations
-import json, os, socket, sqlite3, subprocess, time
+import json, logging, os, socket, sqlite3, subprocess, time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+
+LOG=logging.getLogger(__name__)
+PERMANENT={'TRANSPORT_HISTORY_CHANGED','UNTRUSTED_TRANSPORT_HEAD','ACTOR_VERIFICATION_FAILED','INVALID_COMMAND','INVALID_COMMAND_COMMIT','UNVERIFIED_TRANSPORT_CHANGE','DUPLICATE_COMMAND','RESULT_EXISTS'}
+class RelayError(RuntimeError):
+ def __init__(self,code): super().__init__(code); self.code=code
 
 FIELDS={"protocol_version","command_id","source","worker_id","workstream","task_id","command_type","instructions"}
 SAFE_RESULT={"command_id","worker_id","workstream","state","reason","created_at","updated_at","completed_at","sanitized_result","result_digest","result_truncated"}
@@ -13,11 +19,18 @@ class RelayConfig:
  timeout:float=30; retries:int=3
 
 class UnixSocketClient:
- def __init__(self,path): self.path=path
+ def __init__(self,path,timeout=30,protocol=1,max_bytes=65536): self.path=path; self.timeout=timeout; self.protocol=protocol; self.max_bytes=max_bytes
  def request(self,payload):
-  with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
-   s.settimeout(30); s.connect(self.path); s.sendall(json.dumps(payload).encode()+b'\n')
-   return json.loads(s.makefile('rb').readline())['result']
+  try:
+   with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
+    s.settimeout(self.timeout); s.connect(self.path); s.sendall(json.dumps(payload,separators=(',',':')).encode()+b'\n')
+    raw=s.makefile('rb').readline(self.max_bytes+1)
+   if not raw or len(raw)>self.max_bytes: raise RelayError('SOCKET_INVALID_RESPONSE')
+   data=json.loads(raw)
+   if not isinstance(data,dict) or data.get('ok') is not True or data.get('protocol')!=self.protocol or not isinstance(data.get('result'),dict): raise RelayError('SOCKET_INVALID_RESPONSE')
+   return data['result']
+  except RelayError: raise
+  except (OSError,ValueError,json.JSONDecodeError): raise RelayError('SOCKET_UNAVAILABLE') from None
 
 class StatusRelay:
  def __init__(self,config,socket_client,actor_lookup):
@@ -26,10 +39,13 @@ class StatusRelay:
   d=sqlite3.connect(self.c.state_db); d.execute('CREATE TABLE IF NOT EXISTS relay_commands(command_id TEXT PRIMARY KEY, source_commit TEXT NOT NULL, lifecycle TEXT NOT NULL, published_commit TEXT)'); d.execute('CREATE TABLE IF NOT EXISTS relay_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)'); d.commit(); return d
  def _git(self,*args): return subprocess.run(['git','-C',str(self.c.workspace),*args],check=True,text=True,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=self.c.timeout).stdout.strip()
  def _prepare(self):
-  if not self.c.workspace.exists():
+  if not self.c.workspace.exists() or (self.c.workspace.is_dir() and not any(self.c.workspace.iterdir())):
+   if self.c.workspace.exists(): self.c.workspace.rmdir()
    subprocess.run(['git','clone','--no-checkout',self.c.remote,str(self.c.workspace)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=self.c.timeout)
+  if not (self.c.workspace/'.git').is_dir(): raise RelayError('WORKSPACE_INVALID')
+  if self._git('remote','get-url','origin')!=self.c.remote: raise RelayError('WORKSPACE_REMOTE_MISMATCH')
   self._git('fetch','--prune','origin',self.c.branch)
-  self._git('checkout','-B',self.c.branch,'FETCH_HEAD')
+  self._git('checkout','--detach','FETCH_HEAD')
   return self._git('rev-parse','HEAD')
  def _ancestor(self,a,b): return subprocess.run(['git','-C',str(self.c.workspace),'merge-base','--is-ancestor',a,b],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
  @staticmethod
@@ -98,6 +114,9 @@ def main():
  relay=StatusRelay(RelayConfig(**{k:config[k] for k in ('remote','branch','trusted_head','workspace','state_db','timeout','retries') if k in config}),UnixSocketClient(config['gateway_socket']),github_actor_lookup)
  while True:
   try: relay.poll_once()
-  except Exception: pass
+  except RelayError as exc:
+   LOG.error('relay stopped: %s',exc.code)
+   if exc.code in PERMANENT: raise SystemExit(73)
+  except (OSError,subprocess.SubprocessError): LOG.warning('relay transient failure')
   time.sleep(min(max(float(config.get('poll_seconds',30)),5),300))
 if __name__=='__main__': main()
