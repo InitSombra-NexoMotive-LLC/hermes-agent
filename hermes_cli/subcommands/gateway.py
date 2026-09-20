@@ -121,6 +121,9 @@ def build_gateway_parser(
 
     worker_control = gateway_subparsers.add_parser("worker-control", help="Local trusted worker-control administration")
     worker_control_sub = worker_control.add_subparsers(dest="worker_control_command", required=True)
+    session_bind = worker_control_sub.add_parser("session-bind", help="Retire prior challenge and begin a one-time session bind")
+    session_bind.add_argument("--worker", dest="worker_id", required=True)
+    session_bind.add_argument("--workstream", required=True)
     identity = worker_control_sub.add_parser("identity", help="Inspect or confirm protected Telegram identity")
     identity_sub = identity.add_subparsers(dest="worker_control_identity_command", required=True)
     for action in ("status", "observe", "confirm-observed"):

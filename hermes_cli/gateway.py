@@ -6397,6 +6397,14 @@ def _print_worker_identity_status(status: dict) -> None:
 
 
 def _cmd_worker_control(args):
+    if getattr(args, "worker_control_command", None) == "session-bind":
+        worker_id, workstream = getattr(args, "worker_id", None), getattr(args, "workstream", None)
+        if worker_id != "nvidia-control" or workstream != "CONTROL_PLANE":
+            print_error("Only nvidia-control / CONTROL_PLANE is permitted by this gateway."); raise SystemExit(2)
+        challenge, expires = _worker_control_registry().begin_session_bind(worker_id, workstream, ttl=600)
+        print(f"BIND CHALLENGE: {challenge}")
+        print(f"EXPIRES: {expires}")
+        return
     if getattr(args, "worker_control_command", None) != "identity":
         return
     worker_id, workstream = getattr(args, "worker_id", None), getattr(args, "workstream", None)

@@ -41,6 +41,15 @@ def test_observation_rejects_wrong_scope_and_confirmation_without_evidence(tmp_p
         r.confirm_observed_identity("nvidia-control", "CONTROL_PLANE")
 
 
+def test_session_bind_retires_previous_challenge(tmp_path):
+    r = registry(tmp_path)
+    old = r.start("nvidia-control", "CONTROL_PLANE", "configured")
+    fresh, expires = r.begin_session_bind("nvidia-control", "CONTROL_PLANE")
+    assert fresh != old and expires
+    with pytest.raises(BindError):
+        r.consume("nvidia-control", old, "configured", "session")
+
+
 def test_observation_challenge_is_separate_from_session_binding(tmp_path):
     r = registry(tmp_path)
     challenge = r.start_identity_observation("nvidia-control", "CONTROL_PLANE")

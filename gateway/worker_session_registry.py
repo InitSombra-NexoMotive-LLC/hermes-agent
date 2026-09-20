@@ -119,6 +119,14 @@ class WorkerSessionRegistry:
         self.db.execute("UPDATE bind_challenges SET used=1 WHERE worker_id=?", (worker_id,))
         self.db.commit()
 
+    def begin_session_bind(self, worker_id: str, workstream: str, ttl: int = 600) -> tuple[str, str]:
+        if worker_id != "nvidia-control" or workstream != "CONTROL_PLANE":
+            raise BindError("BIND_SCOPE_REJECTED")
+        self.retire_challenge(worker_id)
+        challenge = self.start(worker_id, workstream, ttl=ttl)
+        expiry = self.db.execute("SELECT expires_at FROM bind_challenges WHERE worker_id=?", (worker_id,)).fetchone()[0]
+        return challenge, expiry
+
     def consume(self, worker_id, text, telegram_chat_id, session_key):
         row = self.db.execute("SELECT challenge,expires_at,telegram_chat_id,used FROM bind_challenges WHERE worker_id=?", (worker_id,)).fetchone()
         if not row or row[3] or text != row[0] or str(telegram_chat_id) != str(row[2]) or datetime.fromisoformat(row[1]) < _now():
