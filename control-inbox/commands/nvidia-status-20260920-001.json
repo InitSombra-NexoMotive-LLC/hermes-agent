@@ -1,0 +1,10 @@
+{
+  "protocol_version": 1,
+  "command_id": "nvidia-status-20260920-001",
+  "source": "github-control",
+  "worker_id": "nvidia-control",
+  "workstream": "CONTROL_PLANE",
+  "task_id": "live-health-check",
+  "command_type": "STATUS",
+  "instructions": "Report sanitized live machine health, Hermes gateway/service status, active repository path and SHA, current task, recent test evidence, resource pressure, failed services, and blockers. Do not reveal credentials, tokens, raw session identifiers, Telegram identifiers, customer data, or other secrets. Do not make changes."
+}
