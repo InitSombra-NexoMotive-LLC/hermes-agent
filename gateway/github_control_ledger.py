@@ -13,7 +13,10 @@ class CommandLedger:
  def accept(self,p):
   t=datetime.now(timezone.utc).isoformat()
   with self._db() as d:
-   d.execute('INSERT INTO github_control_commands(command_id,state,payload,reason,created_at,updated_at,worker_id,workstream) VALUES(?,?,?,?,?,?,?,?)',(p['command_id'],'ACCEPTED',json.dumps(p),'',t,t,p.get('worker_id'),p.get('workstream')))
+   try:
+    d.execute('INSERT INTO github_control_commands(command_id,state,payload,reason,created_at,updated_at,worker_id,workstream) VALUES(?,?,?,?,?,?,?,?)',(p['command_id'],'ACCEPTED',json.dumps(p),'',t,t,p.get('worker_id'),p.get('workstream')))
+    return True
+   except sqlite3.IntegrityError:return False
  def transition(self,id,target,allowed):
   legal={'QUEUED':{'ACCEPTED'},'RUNNING':{'QUEUED'},'DELIVERED':{'RUNNING'},'COMPLETED':{'DELIVERED'},'FAILED':{'ACCEPTED','QUEUED','RUNNING','DELIVERED'}}
   if set(allowed)-legal.get(target,set()):return False
@@ -22,7 +25,10 @@ class CommandLedger:
  def complete(self,id,result):
   t=datetime.now(timezone.utc).isoformat()
   with self._db() as d:r=d.execute('UPDATE github_control_commands SET state=?,sanitized_result=?,result_digest=?,result_truncated=?,completed_at=?,updated_at=? WHERE command_id=? AND state=?',('COMPLETED',result['summary'],result['digest'],int(result['truncated']),t,t,id,'DELIVERED'));return r.rowcount==1
- def fail(self,id,reason):return self.transition(id,'FAILED',('ACCEPTED','QUEUED','RUNNING','DELIVERED'))
+ def fail(self,id,reason):
+  if not isinstance(reason,str) or reason not in {'EXECUTION_FAILED','RESULT_SANITIZATION_FAILED','RESULT_PERSISTENCE_FAILED','INVALID_LIFECYCLE_STATE','SCHEDULING_FAILED'}:reason='EXECUTION_FAILED'
+  with self._db() as d:
+   q=','.join('?'*4);r=d.execute(f'UPDATE github_control_commands SET state=?,reason=?,updated_at=? WHERE command_id=? AND state IN ({q})',('FAILED',reason,datetime.now(timezone.utc).isoformat(),id,'ACCEPTED','QUEUED','RUNNING','DELIVERED'));return r.rowcount==1
  def status(self,id):
   with self._db() as d:
    r=d.execute('SELECT command_id,worker_id,workstream,state,reason,created_at,updated_at,completed_at,sanitized_result,result_digest,result_truncated FROM github_control_commands WHERE command_id=?',(id,)).fetchone()
