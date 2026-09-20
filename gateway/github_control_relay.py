@@ -8,7 +8,7 @@ from pathlib import Path
 LOG=logging.getLogger(__name__)
 FIELDS={'protocol_version','command_id','source','worker_id','workstream','task_id','command_type','instructions'}
 SAFE_RESULT={'command_id','worker_id','workstream','state','reason','created_at','updated_at','completed_at','sanitized_result','result_digest','result_truncated'}
-PERMANENT={'CONFIG_INVALID','TRANSPORT_HISTORY_CHANGED','UNTRUSTED_TRANSPORT_HEAD','ACTOR_VERIFICATION_FAILED','INVALID_COMMAND','INVALID_COMMAND_COMMIT','UNVERIFIED_TRANSPORT_CHANGE','DUPLICATE_COMMAND','RESULT_EXISTS','WORKSPACE_INVALID','WORKSPACE_REMOTE_MISMATCH','UNKNOWN_RESULT_COMMIT','INVALID_LIFECYCLE_STATE','STATUS_INVALID_RESPONSE'}
+PERMANENT={'CONFIG_INVALID','TRANSPORT_HISTORY_CHANGED','UNTRUSTED_TRANSPORT_HEAD','ACTOR_VERIFICATION_FAILED','INVALID_COMMAND','INVALID_COMMAND_COMMIT','UNVERIFIED_TRANSPORT_CHANGE','DUPLICATE_COMMAND','RESULT_EXISTS','WORKSPACE_INVALID','WORKSPACE_REMOTE_MISMATCH','UNKNOWN_RESULT_COMMIT','INVALID_LIFECYCLE_STATE','STATUS_INVALID_RESPONSE','WORKSPACE_DIRTY'}
 TRANSIENT={'GIT_UNAVAILABLE','SOCKET_UNAVAILABLE','SOCKET_INVALID_RESPONSE','ACTOR_LOOKUP_UNAVAILABLE','STATUS_UNAVAILABLE','SUBMIT_FAILED','REMOTE_ADVANCED'}
 APPROVED_REMOTE='https://github.com/InitSombra-NexoMotive-LLC/hermes-agent.git'
 class RelayError(RuntimeError):
@@ -43,6 +43,17 @@ class StatusRelay:
  def git(self,*args):
   try:return subprocess.run(['git','-C',str(self.c.workspace),*args],check=True,text=True,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=self.c.timeout).stdout.strip()
   except (OSError,subprocess.SubprocessError): raise RelayError('GIT_UNAVAILABLE') from None
+ def recover_dirty(self):
+  dirty=self.git('status','--porcelain','--untracked-files=all').splitlines()
+  if not dirty:return
+  if len(dirty)!=1: raise RelayError('WORKSPACE_DIRTY')
+  entry=dirty[0];path=entry[3:]
+  if entry[:2] not in {'??','A '} or not path.startswith('control-inbox/results/') or Path(self.c.workspace/path).is_symlink(): raise RelayError('WORKSPACE_DIRTY')
+  command_id=path.removeprefix('control-inbox/results/').removesuffix('.json');row=self.row(command_id)
+  if path!=f'control-inbox/results/{command_id}.json' or not row or row[1]!='RESULT_READY' or not row[3]: raise RelayError('WORKSPACE_DIRTY')
+  try: exact=(self.c.workspace/path).read_bytes()==json.dumps(json.loads(row[3]),sort_keys=True,separators=(',',':')).encode()+b'\n'
+  except OSError: exact=False
+  if not exact: raise RelayError('WORKSPACE_DIRTY')
  def prepare(self):
   if not self.c.workspace.exists() or (self.c.workspace.is_dir() and not any(self.c.workspace.iterdir())):
    if self.c.workspace.exists(): self.c.workspace.rmdir()
@@ -50,6 +61,7 @@ class StatusRelay:
    except (OSError,subprocess.SubprocessError): raise RelayError('GIT_UNAVAILABLE') from None
   if not (self.c.workspace/'.git').is_dir(): raise RelayError('WORKSPACE_INVALID')
   if self.git('remote','get-url','origin')!=self.c.remote: raise RelayError('WORKSPACE_REMOTE_MISMATCH')
+  self.recover_dirty()
   self.git('fetch','--prune','origin',self.c.branch); self.git('checkout','--detach','FETCH_HEAD'); return self.git('rev-parse','HEAD')
  def ancestor(self,a,b): return subprocess.run(['git','-C',str(self.c.workspace),'merge-base','--is-ancestor',a,b],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
  @staticmethod
@@ -117,9 +129,11 @@ class StatusRelay:
   clean={k:status.get(k) for k in SAFE_RESULT};clean['result_truncated']=bool(truncated);return clean
  def publish(self,command_id,result):
   target=self.c.workspace/'control-inbox/results'/f'{command_id}.json'
-  if target.exists(): raise RelayError('RESULT_EXISTS')
+  if target.exists():
+   row=self.row(command_id);expected=json.dumps(result,sort_keys=True,separators=(',',':'))+'\n'
+   if target.is_symlink() or not row or row[1]!='RESULT_READY' or target.read_text()!=expected: raise RelayError('WORKSPACE_DIRTY')
+  else: target.parent.mkdir(parents=True,exist_ok=True); target.write_text(json.dumps(result,sort_keys=True,separators=(',',':'))+'\n')
   verified_parent=self.git('rev-parse','HEAD')
-  target.parent.mkdir(parents=True,exist_ok=True); target.write_text(json.dumps(result,sort_keys=True,separators=(',',':'))+'\n')
   self.git('add','--',str(target.relative_to(self.c.workspace))); self.git('-c','user.name=Hermes GitHub Control Relay','-c','user.email=relay@localhost','commit','-m',f'control(nvidia): publish sanitized result {command_id}')
   try: self.git('push','origin',f'HEAD:{self.c.branch}'); return self.git('rev-parse','HEAD')
   except RelayError:
