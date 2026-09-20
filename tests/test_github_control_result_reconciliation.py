@@ -27,3 +27,17 @@ def test_result_commit_with_additional_file_is_rejected(tmp_path):
 def test_result_commit_wrong_mode_is_rejected(tmp_path):
  relay,data,sha=_result_relay(tmp_path);path=relay.c.workspace/'control-inbox/results'/(data['command_id']+'.json');path.unlink();path.symlink_to('../x');git('add','-A',cwd=relay.c.workspace);git('-c','user.name=x','-c','user.email=x@y','commit','-m','link',cwd=relay.c.workspace);bad=git('rev-parse','HEAD',cwd=relay.c.workspace)
  with pytest.raises(RelayError):relay.validate_result_commit(bad,relay.changes(bad))
+
+
+def test_rewritten_history_rejected_before_command_resume(tmp_path,monkeypatch):
+ relay,data,sha=_result_relay(tmp_path);relay.save(data['command_id'],'a'*40,'PUBLISHED',data,published=sha)
+ pending=command('pending');relay.save('pending','b'*40,'DISCOVERED',pending);relay.save('pending','b'*40,'SUBMITTED',pending)
+ calls=[];relay.socket.request=lambda payload:calls.append(payload) or {'status':'OK'};monkeypatch.setattr(relay,'prepare',lambda:'new');monkeypatch.setattr(relay,'ancestor',lambda a,b:False)
+ with pytest.raises(RelayError):relay.poll_once()
+ assert calls==[] and relay.row('pending')[1]=='SUBMITTED'
+def test_poll_resumes_pending_after_transport_validation(tmp_path,monkeypatch):
+ relay,data,sha=_result_relay(tmp_path);relay.save(data['command_id'],'a'*40,'PUBLISHED',data,published=sha)
+ pending=command('pending');relay.save('pending','b'*40,'DISCOVERED',pending);relay.save('pending','b'*40,'SUBMITTED',pending)
+ trace=[];monkeypatch.setattr(relay,'prepare',lambda:trace.append('fetch') or sha);monkeypatch.setattr(relay,'ancestor',lambda a,b:trace.append('ancestry') or True);monkeypatch.setattr(relay,'git',lambda *args: '' if args[0]=='rev-list' else sha)
+ relay.socket.request=lambda payload:trace.append(payload['verb']) or {'status':'OK','state':'RUNNING'}
+ assert relay.poll_once()==[] and trace.index('ancestry')<trace.index('command-status') and relay.row('pending')[1]=='SUBMITTED'
