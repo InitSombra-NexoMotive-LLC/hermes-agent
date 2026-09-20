@@ -5140,50 +5140,24 @@ async def _start_gateway_start_control_socket(runner):
             state_path = Path(os.environ.get("HERMES_GITHUB_CONTROL_DB", str(Path.home() / ".hermes" / "github-control.sqlite3")))
             registry = WorkerSessionRegistry(state_path)
             ledger = CommandLedger(state_path)
+            from gateway.github_control_runtime import command_status_response, deliver_command
             def _schedule(event, command, ledger):
-                async def _deliver():
-                    if not ledger.transition(command['command_id'], "RUNNING", ("QUEUED",)):
-                        ledger.fail(command['command_id'], 'INVALID_LIFECYCLE_STATE')
-                        return
-                    try:
-                        if not ledger.transition(command['command_id'], "DELIVERED", ("RUNNING",)):
-                            ledger.fail(command['command_id'], 'INVALID_LIFECYCLE_STATE')
-                            return
-                        result = await runner._handle_message(event)
-                    except Exception:
-                        ledger.fail(command['command_id'], 'EXECUTION_FAILED')
-                        raise
-                    try:
-                        from gateway.github_control_sanitize import sanitize_result
-                        sanitized = sanitize_result(result)
-                    except Exception:
-                        ledger.fail(command['command_id'], 'RESULT_SANITIZATION_FAILED')
-                        raise
-                    try:
-                        if not ledger.complete(command['command_id'], sanitized):
-                            ledger.fail(command['command_id'], 'RESULT_PERSISTENCE_FAILED')
-                            raise RuntimeError('RESULT_PERSISTENCE_FAILED')
-                    except Exception:
-                        ledger.fail(command['command_id'], 'RESULT_PERSISTENCE_FAILED')
-                        raise
-                future = asyncio.run_coroutine_threadsafe(_deliver(), _main_loop)
+                future = asyncio.run_coroutine_threadsafe(
+                    deliver_command(runner, ledger, event, command), _main_loop)
                 def _observe(done):
+                    outcome = "EXECUTION_FAILED"
                     try:
-                        done.result()
+                        outcome = done.result()
                     except Exception:
-                        logger.exception("GitHub-control delivery coroutine failed")
+                        pass
+                    if outcome != "COMPLETED":
+                        logger.warning("GitHub-control delivery ended: %s", outcome)
                 future.add_done_callback(_observe)
             return SubmitCommand(ledger, registry, _schedule).submit(request)
 
         def _command_status_handler(request: dict) -> dict:
-            import re
-            command_id = request.get("command_id")
-            if not isinstance(command_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", command_id):
-                return {"status": "INVALID"}
-            from gateway.github_control_ledger import CommandLedger
             state_path = Path(os.environ.get("HERMES_GITHUB_CONTROL_DB", str(Path.home() / ".hermes" / "github-control.sqlite3")))
-            result = CommandLedger(state_path).status(command_id)
-            return {"status": "NOT_FOUND"} if result is None else {"status": "OK", **result}
+            return command_status_response(request, CommandLedger(state_path))
 
         _control_server = GatewayControlServer(
             verb_handlers={"pause-for-update": _pause_for_update_handler,
