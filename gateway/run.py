@@ -5140,10 +5140,16 @@ async def _start_gateway_start_control_socket(runner):
             state_path = Path(os.environ.get("HERMES_GITHUB_CONTROL_DB", str(Path.home() / ".hermes" / "github-control.sqlite3")))
             registry = WorkerSessionRegistry(state_path)
             ledger = CommandLedger(state_path)
-            def _schedule(event, delivered):
+            def _schedule(event, command, ledger):
                 async def _deliver():
-                    delivered()
-                    await runner._handle_message(event)
+                    ledger.record(command, "RUNNING")
+                    try:
+                        ledger.record(command, "DELIVERED")
+                        await runner._handle_message(event)
+                        ledger.record(command, "COMPLETED")
+                    except Exception as exc:
+                        ledger.record(command, "FAILED", type(exc).__name__)
+                        raise
                 future = asyncio.run_coroutine_threadsafe(_deliver(), _main_loop)
                 def _observe(done):
                     try:

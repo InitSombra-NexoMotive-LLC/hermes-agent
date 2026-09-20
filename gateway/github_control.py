@@ -27,9 +27,9 @@ class SubmitCommand:
   if not isinstance(p,dict) or not REQUIRED<=p.keys() or not isinstance(p['instructions'],str) or len(p['instructions'])>8000:return {'status':'INVALID'}
   if p['source']!='github-control' or p['worker_id']!='nvidia-control' or p['workstream']!='CONTROL_PLANE':return {'command_id':p['command_id'],'status':'UNAUTHORIZED'}
   if p['command_type'] not in ALLOWED:return {'command_id':p['command_id'],'status':'INVALID_COMMAND'}
-  if self.ledger.state(p['command_id']) in {'ACCEPTED','QUEUED','DELIVERED'}:return {'command_id':p['command_id'],'status':'DUPLICATE'}
+  if self.ledger.state(p['command_id']) in {'ACCEPTED','QUEUED','RUNNING','DELIVERED','COMPLETED','FAILED'}:return {'command_id':p['command_id'],'status':'DUPLICATE'}
   try:event=build_worker_control_event(self.registry,p)
   except BindError as e:return {'command_id':p['command_id'],'status':str(e)}
   self.ledger.record(p,'ACCEPTED')
-  try:self.schedule(event,lambda:self.ledger.record(p,'DELIVERED'));self.ledger.record(p,'QUEUED');return {'command_id':p['command_id'],'status':'ACCEPTED','accepted_at':now()}
+  try:self.schedule(event,p,self.ledger);self.ledger.record(p,'QUEUED');return {'command_id':p['command_id'],'status':'ACCEPTED','accepted_at':now()}
   except Exception:self.ledger.record(p,'FAILED','SCHEDULING_FAILED');return {'command_id':p['command_id'],'status':'SCHEDULING_FAILED'}
