@@ -8,7 +8,9 @@ from pathlib import Path
 LOG=logging.getLogger(__name__)
 FIELDS={'protocol_version','command_id','source','worker_id','workstream','task_id','command_type','instructions'}
 SAFE_RESULT={'command_id','worker_id','workstream','state','reason','created_at','updated_at','completed_at','sanitized_result','result_digest','result_truncated'}
-PERMANENT={'TRANSPORT_HISTORY_CHANGED','UNTRUSTED_TRANSPORT_HEAD','ACTOR_VERIFICATION_FAILED','INVALID_COMMAND','INVALID_COMMAND_COMMIT','UNVERIFIED_TRANSPORT_CHANGE','DUPLICATE_COMMAND','RESULT_EXISTS','WORKSPACE_INVALID','WORKSPACE_REMOTE_MISMATCH','UNKNOWN_RESULT_COMMIT','INVALID_LIFECYCLE_STATE','STATUS_INVALID_RESPONSE'}
+PERMANENT={'CONFIG_INVALID','TRANSPORT_HISTORY_CHANGED','UNTRUSTED_TRANSPORT_HEAD','ACTOR_VERIFICATION_FAILED','INVALID_COMMAND','INVALID_COMMAND_COMMIT','UNVERIFIED_TRANSPORT_CHANGE','DUPLICATE_COMMAND','RESULT_EXISTS','WORKSPACE_INVALID','WORKSPACE_REMOTE_MISMATCH','UNKNOWN_RESULT_COMMIT','INVALID_LIFECYCLE_STATE','STATUS_INVALID_RESPONSE'}
+TRANSIENT={'GIT_UNAVAILABLE','SOCKET_UNAVAILABLE','SOCKET_INVALID_RESPONSE','ACTOR_LOOKUP_UNAVAILABLE','STATUS_UNAVAILABLE','SUBMIT_FAILED','REMOTE_ADVANCED'}
+APPROVED_REMOTE='https://github.com/InitSombra-NexoMotive-LLC/hermes-agent.git'
 class RelayError(RuntimeError):
  def __init__(self,code): super().__init__(code); self.code=code
 @dataclass
@@ -170,13 +172,27 @@ class StatusRelay:
 
 def github_actor_lookup(commit):
  raw=subprocess.run(['gh','api',f'repos/InitSombra-NexoMotive-LLC/hermes-agent/commits/{commit}'],check=True,text=True,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=30).stdout; return (json.loads(raw).get('author') or {})
+def load_config(path):
+ try:
+  p=Path(path);st=p.lstat();required={'remote','branch','trusted_head','workspace','state_db','gateway_socket'};optional={'timeout','retries','poll_seconds'}
+  if p.is_symlink() or not p.is_file() or st.st_uid!=os.getuid() or st.st_mode&0o777!=0o600: raise ValueError
+  raw=json.loads(p.read_text())
+  if not isinstance(raw,dict) or set(raw)-required-optional or required-set(raw) or raw['remote']!=APPROVED_REMOTE or raw['branch']!='control/nvidia-command-inbox' or not isinstance(raw['trusted_head'],str) or not re.fullmatch(r'[0-9a-f]{40}',raw['trusted_head']): raise ValueError
+  if any(not isinstance(raw[k],str) or not Path(raw[k]).is_absolute() for k in ('workspace','state_db','gateway_socket')): raise ValueError
+  if 'timeout' in raw and (type(raw['timeout']) not in (int,float) or not 1<=raw['timeout']<=120): raise ValueError
+  if 'retries' in raw and (type(raw['retries']) is not int or not 0<=raw['retries']<=10): raise ValueError
+  if 'poll_seconds' in raw and (type(raw['poll_seconds']) not in (int,float) or not 5<=raw['poll_seconds']<=300): raise ValueError
+  return raw
+ except Exception: raise RelayError('CONFIG_INVALID')
+def run_service_iteration(relay):
+ try: relay.poll_once()
+ except RelayError as e:
+  if e.code in TRANSIENT: LOG.error('relay outcome: %s',e.code);return
+  if e.code in PERMANENT: LOG.error('relay outcome: %s',e.code);raise SystemExit(73)
+  LOG.error('relay outcome: INTERNAL_FAILURE');raise SystemExit(1)
+ except Exception: LOG.error('relay outcome: INTERNAL_FAILURE');raise SystemExit(1)
 def main():
- config=json.loads(Path(os.environ['HERMES_GITHUB_CONTROL_RELAY_CONFIG']).read_text()); c=RelayConfig(**{k:config[k] for k in RelayConfig.__annotations__ if k in config}); relay=StatusRelay(c,UnixSocketClient(config['gateway_socket'],timeout=c.timeout),github_actor_lookup)
- while True:
-  try: relay.poll_once()
-  except RelayError as e:
-   LOG.error('relay outcome: %s',e.code)
-   if e.code in PERMANENT: raise SystemExit(73)
-  except Exception: LOG.error('relay outcome: INTERNAL_FAILURE')
-  time.sleep(max(5,min(c.poll_seconds,300)))
+ try: config=load_config(os.environ['HERMES_GITHUB_CONTROL_RELAY_CONFIG']);c=RelayConfig(**{k:config[k] for k in RelayConfig.__annotations__ if k in config});relay=StatusRelay(c,UnixSocketClient(config['gateway_socket'],timeout=c.timeout),github_actor_lookup)
+ except Exception: LOG.error('relay outcome: CONFIG_INVALID');raise SystemExit(73)
+ while True: run_service_iteration(relay);time.sleep(c.poll_seconds)
 if __name__=='__main__':main()

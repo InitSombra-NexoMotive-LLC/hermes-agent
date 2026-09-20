@@ -4,7 +4,13 @@ The relay accepts only signed-by-API `STATUS` command commits on `control/nvidia
 
 ## Configuration
 
-Create `/home/rodrigo/.config/hermes/github-control-relay.json` mode `0600` with non-secret paths and the pinned initial transport SHA. GitHub authentication is inherited from the existing `gh` credential manager; do not put credentials in this file or unit.
+Create `/home/rodrigo/.config/hermes/github-control-relay.json` mode `0600` with non-secret paths and the pinned initial transport SHA:
+
+```json
+{"remote":"https://github.com/InitSombra-NexoMotive-LLC/hermes-agent.git","branch":"control/nvidia-command-inbox","trusted_head":"<40-lowercase-hex-sha>","workspace":"/mnt/ssd-cloud/hermes-github-control-transport","state_db":"/mnt/ssd-cloud/hermes-github-control-state/relay.db","gateway_socket":"/home/rodrigo/.hermes/gateway.sock","timeout":30,"retries":3,"poll_seconds":30}
+```
+
+GitHub authentication is inherited from the existing `gh` credential manager; do not put credentials in this file or unit.
 
 ## Required configuration and recovery
 
