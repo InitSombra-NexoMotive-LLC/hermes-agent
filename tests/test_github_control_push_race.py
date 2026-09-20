@@ -61,3 +61,19 @@ def test_rewritten_remote_during_push_is_rejected(tmp_path):
  assert not relay.ancestor(parent,'FETCH_HEAD') and relay.row('race')[1]=='RESULT_READY' and json.loads(relay.row('race')[3])==stored
  git('fetch','origin',cwd=comp);assert git('rev-parse','origin/control/nvidia-command-inbox',cwd=comp)==rewritten
  with pytest.raises(subprocess.CalledProcessError):git('show','origin/control/nvidia-command-inbox:control-inbox/results/race.json',cwd=comp)
+
+
+def test_ambiguous_success_reconciles_without_duplicate(tmp_path,monkeypatch):
+ relay,comp,result,bare=setup(tmp_path);original=relay.git;pushes=[]
+ def ambiguous(*args):
+  if args[0]=='push':
+   original(*args);pushes.append('pushed');raise RelayError('GIT_UNAVAILABLE')
+  return original(*args)
+ monkeypatch.setattr(relay,'git',ambiguous)
+ with pytest.raises(RelayError) as raised:relay.publish('race',result)
+ assert raised.value.code=='REMOTE_ADVANCED' and relay.row('race')[1]=='RESULT_READY' and json.loads(relay.row('race')[3])==result
+ git('fetch','origin',cwd=comp);remote_sha=git('rev-parse','origin/control/nvidia-command-inbox',cwd=comp);assert git('show','origin/control/nvidia-command-inbox:control-inbox/results/race.json',cwd=comp)
+ monkeypatch.setattr(relay,'git',original);calls=[];relay.publish=lambda *args:calls.append('publish');relay.socket=type('Socket',(),{'request':lambda self,payload:calls.append(payload)})()
+ assert relay.poll_once()==[] and relay.row('race')[1]=='PUBLISHED' and relay.row('race')[4]==remote_sha and calls==[]
+ history=git('log','origin/control/nvidia-command-inbox','--format=%H','--','control-inbox/results/race.json',cwd=comp);assert len(history.splitlines())==1
+ assert relay.poll_once()==[] and calls==[]
