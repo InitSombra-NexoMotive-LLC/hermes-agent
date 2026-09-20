@@ -12,7 +12,11 @@ def now():return datetime.now(timezone.utc).isoformat()
 class CommandLedger:
  def __init__(self,path:Path):
   self.path=Path(path);self.path.parent.mkdir(parents=True,exist_ok=True)
-  with self._connect() as db:db.execute("CREATE TABLE IF NOT EXISTS github_control_commands(command_id TEXT PRIMARY KEY,state TEXT NOT NULL,payload TEXT NOT NULL,reason TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)")
+  with self._connect() as db:
+   db.execute("CREATE TABLE IF NOT EXISTS github_control_commands(command_id TEXT PRIMARY KEY,state TEXT NOT NULL,payload TEXT NOT NULL,reason TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)")
+   columns={r[1] for r in db.execute('PRAGMA table_info(github_control_commands)')}
+   for name,kind in {'worker_id':'TEXT','workstream':'TEXT','completed_at':'TEXT','sanitized_result':'TEXT','result_digest':'TEXT','result_truncated':'INTEGER NOT NULL DEFAULT 0'}.items():
+    if name not in columns:db.execute(f'ALTER TABLE github_control_commands ADD COLUMN {name} {kind}')
  def _connect(self):return sqlite3.connect(self.path,timeout=5)
  def state(self,id):
   with self._connect() as db:
