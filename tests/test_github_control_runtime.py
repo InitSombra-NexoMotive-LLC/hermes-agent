@@ -7,6 +7,7 @@ from gateway.control_socket import GatewayControlServer
 from gateway.github_control import SubmitCommand
 from gateway.github_control_ledger import CommandLedger
 from gateway.github_control_runtime import command_status_response, deliver_command
+from gateway.run import _github_control_command_status_handler
 from gateway.worker_session_registry import WorkerSessionRegistry
 
 
@@ -112,3 +113,25 @@ def test_concurrent_submit_executes_once_through_production_delivery(tmp_path):
         outcomes = list(pool.map(lambda _: invoke(), range(2)))
     assert sorted(outcomes) == ["ACCEPTED", "DUPLICATE"]
     assert runner.calls == 1 and scheduled == ["COMPLETED"]
+
+
+def test_first_status_request_uses_registered_production_seam(tmp_path):
+    async def exercise():
+        calls = []
+        server = GatewayControlServer(
+            tmp_path,
+            verb_handlers={"command-status": lambda request: calls.append(request) or _github_control_command_status_handler(request, tmp_path / "ledger.db")},
+        )
+        assert await server.start()
+        try:
+            reader, writer = await asyncio.open_unix_connection(str(tmp_path / "gateway.sock"))
+            writer.write(json.dumps({"verb": "command-status", "command_id": "first-status-request-001"}).encode() + b"\n")
+            await writer.drain()
+            response = json.loads(await reader.readline())
+            writer.close(); await writer.wait_closed()
+        finally:
+            await server.stop()
+        assert calls == [{"verb": "command-status", "command_id": "first-status-request-001"}]
+        assert response.get("ok") is True and type(response.get("protocol")) is int and response["protocol"] == 1
+        assert isinstance(response.get("result"), dict) and response["result"].get("status") == "NOT_FOUND"
+    asyncio.run(exercise())

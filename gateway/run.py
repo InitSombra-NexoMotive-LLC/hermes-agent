@@ -29,6 +29,13 @@ from pathlib import Path
 from datetime import datetime
 from typing import Callable, Dict, Optional, Any, List, Tuple, cast
 
+
+def _github_control_command_status_handler(request: dict, state_path: Path) -> dict:
+    """Independent local control-socket status seam; safe before any submission."""
+    from gateway.github_control import CommandLedger
+    from gateway.github_control_runtime import command_status_response
+    return command_status_response(request, CommandLedger(state_path))
+
 from agent.async_utils import safe_schedule_threadsafe
 from agent.conversation_compression import (
     COMPACTION_DONE_STATUS, COMPACTION_HEARTBEAT_STATUS, COMPACTION_STATUS, COMPRESSION_RETRY_CONTEXT_REDUCED_STATUS_TEMPLATE,
@@ -5157,7 +5164,7 @@ async def _start_gateway_start_control_socket(runner):
 
         def _command_status_handler(request: dict) -> dict:
             state_path = Path(os.environ.get("HERMES_GITHUB_CONTROL_DB", str(Path.home() / ".hermes" / "github-control.sqlite3")))
-            return command_status_response(request, CommandLedger(state_path))
+            return _github_control_command_status_handler(request, state_path)
 
         _control_server = GatewayControlServer(
             verb_handlers={"pause-for-update": _pause_for_update_handler,
