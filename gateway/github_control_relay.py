@@ -8,7 +8,7 @@ from pathlib import Path
 LOG=logging.getLogger(__name__)
 FIELDS={'protocol_version','command_id','source','worker_id','workstream','task_id','command_type','instructions'}
 SAFE_RESULT={'command_id','worker_id','workstream','state','reason','created_at','updated_at','completed_at','sanitized_result','result_digest','result_truncated'}
-PERMANENT={'TRANSPORT_HISTORY_CHANGED','UNTRUSTED_TRANSPORT_HEAD','ACTOR_VERIFICATION_FAILED','INVALID_COMMAND','INVALID_COMMAND_COMMIT','UNVERIFIED_TRANSPORT_CHANGE','DUPLICATE_COMMAND','RESULT_EXISTS','WORKSPACE_INVALID','WORKSPACE_REMOTE_MISMATCH','UNKNOWN_RESULT_COMMIT'}
+PERMANENT={'TRANSPORT_HISTORY_CHANGED','UNTRUSTED_TRANSPORT_HEAD','ACTOR_VERIFICATION_FAILED','INVALID_COMMAND','INVALID_COMMAND_COMMIT','UNVERIFIED_TRANSPORT_CHANGE','DUPLICATE_COMMAND','RESULT_EXISTS','WORKSPACE_INVALID','WORKSPACE_REMOTE_MISMATCH','UNKNOWN_RESULT_COMMIT','INVALID_LIFECYCLE_STATE','STATUS_INVALID_RESPONSE'}
 class RelayError(RuntimeError):
  def __init__(self,code): super().__init__(code); self.code=code
 @dataclass
@@ -52,8 +52,8 @@ class StatusRelay:
  def ancestor(self,a,b): return subprocess.run(['git','-C',str(self.c.workspace),'merge-base','--is-ancestor',a,b],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
  @staticmethod
  def validate_command(data):
-  if not isinstance(data,dict) or set(data)!=FIELDS or data.get('protocol_version')!=1: raise RelayError('INVALID_COMMAND')
-  if not all(isinstance(data.get(k),str) for k in FIELDS-{'protocol_version'}): raise RelayError('INVALID_COMMAND')
+  if not isinstance(data,dict) or set(data)!=FIELDS or type(data.get('protocol_version')) is not int or data['protocol_version']!=1: raise RelayError('INVALID_COMMAND')
+  if not all(isinstance(data.get(k),str) for k in FIELDS-{'protocol_version'}) or len(data['instructions'])>8000: raise RelayError('INVALID_COMMAND')
   if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}',data['command_id']): raise RelayError('INVALID_COMMAND')
   if (data['source'],data['worker_id'],data['workstream'],data['command_type'])!=('github-control','nvidia-control','CONTROL_PLANE','STATUS'): raise RelayError('INVALID_COMMAND')
   return data
@@ -93,6 +93,7 @@ class StatusRelay:
   status=self.socket.request({'verb':'command-status','command_id':command_id})
   if status.get('status')!='OK': raise RelayError('STATUS_UNAVAILABLE')
   if status.get('state') not in {'COMPLETED','FAILED'}: return None
+  if status.get('command_id')!=command_id or status.get('worker_id')!='nvidia-control' or status.get('workstream')!='CONTROL_PLANE' or not isinstance(status.get('result_truncated'),(bool,int)) or not isinstance(status.get('sanitized_result'),(str,type(None))) or not isinstance(status.get('result_digest'),(str,type(None))): raise RelayError('STATUS_INVALID_RESPONSE')
   return {k:status.get(k) for k in SAFE_RESULT}
  def publish(self,command_id,result):
   target=self.c.workspace/'control-inbox/results'/f'{command_id}.json'
@@ -140,7 +141,10 @@ class StatusRelay:
    try:data=self.validate_command(json.loads(raw))
    except RelayError: raise
    except Exception: raise RelayError('INVALID_COMMAND') from None
-   self.save(data['command_id'],commit,'DISCOVERED',data) if not self.row(data['command_id']) else None
+   if commands[0]!=f"control-inbox/commands/{data['command_id']}.json": raise RelayError('INVALID_COMMAND_COMMIT')
+   existing=self.row(data['command_id'])
+   if existing and (existing[0]!=commit or existing[2]!=json.dumps(data,sort_keys=True)): raise RelayError('DUPLICATE_COMMAND')
+   self.save(data['command_id'],commit,'DISCOVERED',data) if not existing else None
   with self.db() as d:d.execute("INSERT INTO relay_meta VALUES('head',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(head,)); pending=d.execute("SELECT command_id,source_commit,command_json FROM relay_commands WHERE lifecycle IN ('DISCOVERED','SUBMITTED','RESULT_READY')").fetchall()
   for command_id,commit,raw in pending:
    if self.resume(command_id,commit,json.loads(raw)): done.append(command_id)
