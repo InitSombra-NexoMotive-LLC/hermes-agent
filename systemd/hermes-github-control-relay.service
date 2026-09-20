@@ -1,0 +1,23 @@
+[Unit]
+Description=Hermes GitHub Control Relay (STATUS-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rodrigo
+WorkingDirectory=/mnt/ssd-cloud/hermes-control-relay
+Environment=PYTHONUNBUFFERED=1
+Environment=HERMES_GITHUB_CONTROL_RELAY_CONFIG=/home/rodrigo/.config/hermes/github-control-relay.json
+ExecStart=/home/rodrigo/.hermes/hermes-agent/venv/bin/python -m gateway.github_control_relay
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/mnt/ssd-cloud/hermes-github-control-transport /mnt/ssd-cloud/hermes-github-control-state
+UMask=0077
+
+[Install]
+WantedBy=default.target
