@@ -52,3 +52,12 @@ def test_invalid_intervening_commit_prevents_result_push(tmp_path):
  with relay.db() as d: assert d.execute("SELECT value FROM relay_meta WHERE key='head'").fetchone() is None
  git('fetch','origin',cwd=comp);assert bad in git('log','--format=%H','origin/control/nvidia-command-inbox',cwd=comp)
  with pytest.raises(subprocess.CalledProcessError):git('show','origin/control/nvidia-command-inbox:control-inbox/results/race.json',cwd=comp)
+
+def test_rewritten_remote_during_push_is_rejected(tmp_path):
+ relay,comp,result,bare=setup(tmp_path);parent=git('rev-parse','HEAD',cwd=relay.c.workspace);stored=json.loads(relay.row('race')[3])
+ git('checkout','--orphan','rewritten',cwd=comp);(comp/'rewritten-marker').write_text('root');git('add','.',cwd=comp);git('-c','user.name=c','-c','user.email=c@x','commit','-m','rewritten',cwd=comp);rewritten=git('rev-parse','HEAD',cwd=comp);git('push','--force','origin','HEAD:control/nvidia-command-inbox',cwd=comp)
+ with pytest.raises(RelayError) as raised:relay.publish('race',result)
+ assert raised.value.code=='TRANSPORT_HISTORY_CHANGED' and raised.value.code in __import__('gateway.github_control_relay',fromlist=['PERMANENT']).PERMANENT
+ assert not relay.ancestor(parent,'FETCH_HEAD') and relay.row('race')[1]=='RESULT_READY' and json.loads(relay.row('race')[3])==stored
+ git('fetch','origin',cwd=comp);assert git('rev-parse','origin/control/nvidia-command-inbox',cwd=comp)==rewritten
+ with pytest.raises(subprocess.CalledProcessError):git('show','origin/control/nvidia-command-inbox:control-inbox/results/race.json',cwd=comp)
