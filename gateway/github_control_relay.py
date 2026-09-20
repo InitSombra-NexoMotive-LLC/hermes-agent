@@ -97,15 +97,14 @@ class StatusRelay:
  def publish(self,command_id,result):
   target=self.c.workspace/'control-inbox/results'/f'{command_id}.json'
   if target.exists(): raise RelayError('RESULT_EXISTS')
+  verified_parent=self.git('rev-parse','HEAD')
   target.parent.mkdir(parents=True,exist_ok=True); target.write_text(json.dumps(result,sort_keys=True,separators=(',',':'))+'\n')
   self.git('add','--',str(target.relative_to(self.c.workspace))); self.git('-c','user.name=Hermes GitHub Control Relay','-c','user.email=relay@localhost','commit','-m',f'control(nvidia): publish sanitized result {command_id}')
-  for _ in range(self.c.retries):
-   try: self.git('push','origin',f'HEAD:{self.c.branch}'); return self.git('rev-parse','HEAD')
-   except RelayError:
-    self.git('fetch','origin',self.c.branch)
-    if not self.ancestor(self.git('rev-parse','HEAD~1'),'FETCH_HEAD'): raise RelayError('TRANSPORT_HISTORY_CHANGED')
-    self.git('reset','--hard','FETCH_HEAD'); target.parent.mkdir(parents=True,exist_ok=True); target.write_text(json.dumps(result,sort_keys=True,separators=(',',':'))+'\n'); self.git('add','--',str(target.relative_to(self.c.workspace))); self.git('-c','user.name=Hermes GitHub Control Relay','-c','user.email=relay@localhost','commit','-m',f'control(nvidia): publish sanitized result {command_id}')
-  raise RelayError('PUSH_FAILED')
+  try: self.git('push','origin',f'HEAD:{self.c.branch}'); return self.git('rev-parse','HEAD')
+  except RelayError:
+   self.git('fetch','origin',self.c.branch)
+   if not self.ancestor(verified_parent,'FETCH_HEAD'): raise RelayError('TRANSPORT_HISTORY_CHANGED')
+   raise RelayError('REMOTE_ADVANCED')
  def resume(self,command_id,commit,data):
   row=self.row(command_id)
   if row and row[0]!=commit: raise RelayError('DUPLICATE_COMMAND')
