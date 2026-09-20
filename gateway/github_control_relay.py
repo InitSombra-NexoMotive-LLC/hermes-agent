@@ -84,11 +84,21 @@ class StatusRelay:
  def row(self,command_id):
   with self.db() as d:return d.execute('SELECT source_commit,lifecycle,command_json,result_json,published_commit,reason FROM relay_commands WHERE command_id=?',(command_id,)).fetchone()
  def save(self,command_id,commit,state,data,result=None,published=None,reason=None):
-  legal={'DISCOVERED':{'SUBMITTED','FAILED'},'SUBMITTED':{'RESULT_READY','FAILED'},'RESULT_READY':{'PUBLISHED','FAILED'},'PUBLISHED':set(),'FAILED':set()}
+  legal={'DISCOVERED':{'SUBMITTED','FAILED'},'SUBMITTED':{'RESULT_READY','FAILED'},'RESULT_READY':{'PUBLISHED','FAILED'},'PUBLISHED':set(),'FAILED':set()}; canonical=json.dumps(data,sort_keys=True); encoded=json.dumps(result,sort_keys=True) if result is not None else None
+  if state=='FAILED' and reason not in {'EXECUTION_FAILED','RESULT_SANITIZATION_FAILED','RESULT_PERSISTENCE_FAILED','INVALID_LIFECYCLE_STATE','SCHEDULING_FAILED'}: raise RelayError('INVALID_LIFECYCLE_STATE')
   with self.db() as d:
-   current=d.execute('SELECT lifecycle,source_commit FROM relay_commands WHERE command_id=?',(command_id,)).fetchone()
-   if current and (current[1]!=commit or (state!=current[0] and state not in legal[current[0]])): raise RelayError('INVALID_LIFECYCLE_STATE')
-   d.execute('INSERT INTO relay_commands(command_id,source_commit,lifecycle,command_json,result_json,published_commit,reason) VALUES(?,?,?,?,?,?,?) ON CONFLICT(command_id) DO UPDATE SET lifecycle=excluded.lifecycle,result_json=COALESCE(excluded.result_json,relay_commands.result_json),published_commit=COALESCE(excluded.published_commit,relay_commands.published_commit),reason=COALESCE(excluded.reason,relay_commands.reason)',(command_id,commit,state,json.dumps(data,sort_keys=True),json.dumps(result,sort_keys=True) if result else None,published,reason))
+   current=d.execute('SELECT lifecycle,source_commit,command_json,result_json,published_commit,reason FROM relay_commands WHERE command_id=?',(command_id,)).fetchone()
+   if not current:
+    if state!='DISCOVERED': raise RelayError('INVALID_LIFECYCLE_STATE')
+    d.execute('INSERT INTO relay_commands(command_id,source_commit,lifecycle,command_json,result_json,published_commit,reason) VALUES(?,?,?,?,?,?,?)',(command_id,commit,state,canonical,None,None,None)); return
+   old,old_commit,old_command,old_result,old_published,old_reason=current
+   if old==state:
+    if old_commit!=commit or old_command!=canonical or (encoded is not None and encoded!=old_result) or (published is not None and published!=old_published) or (reason is not None and reason!=old_reason): raise RelayError('INVALID_LIFECYCLE_STATE')
+    return
+   if state not in legal[old] or old_commit!=commit or old_command!=canonical: raise RelayError('INVALID_LIFECYCLE_STATE')
+   if state=='RESULT_READY' and encoded is None: raise RelayError('INVALID_LIFECYCLE_STATE')
+   if state=='PUBLISHED' and (old_result is None or encoded not in {None,old_result} or not published): raise RelayError('INVALID_LIFECYCLE_STATE')
+   d.execute('UPDATE relay_commands SET lifecycle=?,result_json=COALESCE(?,result_json),published_commit=COALESCE(?,published_commit),reason=COALESCE(?,reason) WHERE command_id=?',(state,encoded,published,reason,command_id))
  def result(self,command_id):
   status=self.socket.request({'verb':'command-status','command_id':command_id})
   if status.get('status')!='OK': raise RelayError('STATUS_UNAVAILABLE')
