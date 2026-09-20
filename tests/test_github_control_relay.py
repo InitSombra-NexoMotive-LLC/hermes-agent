@@ -36,10 +36,11 @@ def test_end_to_end_command_publish_and_restart(tmp_path):
 
 @pytest.mark.parametrize('patch',[
  {"command_type":"CONTINUE"},{"worker_id":"other"},{"extra":"nope"},{"protocol_version":2},
+ {"command_id":":bad"},{"command_id":".bad"},{"command_id":"_bad"},{"command_id":"-bad"},
 ])
 def test_schema_rejections(tmp_path,patch):
  data=command(); data.update(patch)
- with pytest.raises(ValueError): StatusRelay.validate_command(data)
+ with pytest.raises(RelayError): StatusRelay.validate_command(data)
 
 
 def test_actual_unix_socket_framing_and_response_validation(tmp_path):
