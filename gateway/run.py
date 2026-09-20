@@ -5144,7 +5144,13 @@ async def _start_gateway_start_control_socket(runner):
                 async def _deliver():
                     delivered()
                     await runner._handle_message(event)
-                asyncio.run_coroutine_threadsafe(_deliver(), _main_loop)
+                future = asyncio.run_coroutine_threadsafe(_deliver(), _main_loop)
+                def _observe(done):
+                    try:
+                        done.result()
+                    except Exception:
+                        logger.exception("GitHub-control delivery coroutine failed")
+                future.add_done_callback(_observe)
             return SubmitCommand(ledger, registry, _schedule).submit(request)
 
         _control_server = GatewayControlServer(

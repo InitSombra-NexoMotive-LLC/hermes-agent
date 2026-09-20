@@ -11,12 +11,16 @@ class CommandError(ValueError):pass
 def now():return datetime.now(timezone.utc).isoformat()
 class CommandLedger:
  def __init__(self,path:Path):
-  path.parent.mkdir(parents=True,exist_ok=True);self.db=sqlite3.connect(path)
-  self.db.execute("CREATE TABLE IF NOT EXISTS github_control_commands(command_id TEXT PRIMARY KEY,state TEXT NOT NULL,payload TEXT NOT NULL,reason TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)");self.db.commit()
+  self.path=Path(path);self.path.parent.mkdir(parents=True,exist_ok=True)
+  with self._connect() as db:db.execute("CREATE TABLE IF NOT EXISTS github_control_commands(command_id TEXT PRIMARY KEY,state TEXT NOT NULL,payload TEXT NOT NULL,reason TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)")
+ def _connect(self):return sqlite3.connect(self.path,timeout=5)
  def state(self,id):
-  r=self.db.execute('SELECT state FROM github_control_commands WHERE command_id=?',(id,)).fetchone();return r[0] if r else None
+  with self._connect() as db:
+   r=db.execute('SELECT state FROM github_control_commands WHERE command_id=?',(id,)).fetchone();return r[0] if r else None
  def record(self,p,state,reason=None):
-  self.db.execute('INSERT OR REPLACE INTO github_control_commands VALUES(?,?,?,?,?,?)',(p['command_id'],state,json.dumps(p),reason,now(),now()));self.db.commit()
+  with self._connect() as db:
+   prior=db.execute('SELECT created_at FROM github_control_commands WHERE command_id=?',(p['command_id'],)).fetchone()
+   db.execute('INSERT OR REPLACE INTO github_control_commands VALUES(?,?,?,?,?,?)',(p['command_id'],state,json.dumps(p),reason,prior[0] if prior else now(),now()))
 class SubmitCommand:
  def __init__(self,ledger,registry,schedule:Callable):self.ledger,self.registry,self.schedule=ledger,registry,schedule
  def submit(self,p:dict[str,Any]):
