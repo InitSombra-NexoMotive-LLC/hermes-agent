@@ -62,6 +62,25 @@ class StatusRelay:
   except Exception: raise RelayError('ACTOR_LOOKUP_UNAVAILABLE') from None
   if not isinstance(actor,dict) or actor.get('login')!='InitSombra-NexoMotive-LLC' or actor.get('id')!=239685310: raise RelayError('ACTOR_VERIFICATION_FAILED')
  def changes(self,commit): return [x.split('\t',1) for x in self.git('diff-tree','--root','--no-commit-id','--name-status','-r',commit).splitlines()]
+ def raw_git(self,*args):
+  try:return subprocess.run(['git','-C',str(self.c.workspace),*args],check=True,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=self.c.timeout).stdout
+  except (OSError,subprocess.SubprocessError): raise RelayError('GIT_UNAVAILABLE') from None
+ def validate_result_commit(self,commit,changes):
+  if len(changes)!=1 or changes[0][0]!='A' or not changes[0][1].startswith('control-inbox/results/'): raise RelayError('UNKNOWN_RESULT_COMMIT')
+  path=changes[0][1]; command_id=path.removeprefix('control-inbox/results/').removesuffix('.json')
+  if path!=f'control-inbox/results/{command_id}.json' or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}',command_id): raise RelayError('UNKNOWN_RESULT_COMMIT')
+  if not self.git('ls-tree',commit,'--',path).startswith('100644 '): raise RelayError('UNKNOWN_RESULT_COMMIT')
+  row=self.row(command_id)
+  if not row or row[1] not in {'RESULT_READY','PUBLISHED'} or not row[3]: raise RelayError('UNKNOWN_RESULT_COMMIT')
+  expected=json.dumps(json.loads(row[3]),sort_keys=True,separators=(',',':')).encode()+b'\n'
+  if self.raw_git('show',f'{commit}:{path}')!=expected: raise RelayError('UNKNOWN_RESULT_COMMIT')
+  try:
+   if set(json.loads(expected))!=SAFE_RESULT: raise RelayError('UNKNOWN_RESULT_COMMIT')
+  except RelayError: raise
+  except Exception: raise RelayError('UNKNOWN_RESULT_COMMIT') from None
+  if row[1]=='PUBLISHED' and row[4]!=commit: raise RelayError('UNKNOWN_RESULT_COMMIT')
+  if row[1]=='RESULT_READY': self.save(command_id,row[0],'PUBLISHED',json.loads(row[2]),result=json.loads(row[3]),published=commit)
+
  def row(self,command_id):
   with self.db() as d:return d.execute('SELECT source_commit,lifecycle,command_json,result_json,published_commit,reason FROM relay_commands WHERE command_id=?',(command_id,)).fetchone()
  def save(self,command_id,commit,state,data,result=None,published=None,reason=None):
@@ -106,19 +125,15 @@ class StatusRelay:
   return False
  def poll_once(self):
   head=self.prepare()
-  resumed=[]
-  with self.db() as d: pending=d.execute("SELECT command_id,source_commit,command_json FROM relay_commands WHERE lifecycle IN ('DISCOVERED','SUBMITTED','RESULT_READY')").fetchall(); row=d.execute("SELECT value FROM relay_meta WHERE key='head'").fetchone()
-  for command_id,commit,raw in pending:
-   if self.resume(command_id,commit,json.loads(raw)): resumed.append(command_id)
   with self.db() as d: row=d.execute("SELECT value FROM relay_meta WHERE key='head'").fetchone()
   base=row[0] if row else self.c.trusted_head
   if not self.ancestor(self.c.trusted_head,head): raise RelayError('UNTRUSTED_TRANSPORT_HEAD')
   if not self.ancestor(base,head): raise RelayError('TRANSPORT_HISTORY_CHANGED')
-  commits=([head] if not row and base==head else self.git('rev-list','--reverse',f'{base}..{head}').splitlines()); done=resumed
+  commits=([head] if not row and base==head else self.git('rev-list','--reverse',f'{base}..{head}').splitlines()); done=[]
   for commit in commits:
    changes=self.changes(commit); commands=[p for s,p in changes if p.startswith('control-inbox/commands/')]
    if not commands:
-    if not all(s=='A' and p.startswith('control-inbox/results/') for s,p in changes): raise RelayError('UNVERIFIED_TRANSPORT_CHANGE')
+    self.validate_result_commit(commit,changes)
     continue
    if len(changes)!=1 or len(commands)!=1 or changes[0][0]!='A' or '/' in commands[0].removeprefix('control-inbox/commands/') or not self.git('ls-tree',commit,'--',commands[0]).startswith('100644 '): raise RelayError('INVALID_COMMAND_COMMIT')
    self.verify_actor(commit); raw=self.git('show',f'{commit}:{commands[0]}')
@@ -126,8 +141,10 @@ class StatusRelay:
    try:data=self.validate_command(json.loads(raw))
    except RelayError: raise
    except Exception: raise RelayError('INVALID_COMMAND') from None
-   if self.resume(data['command_id'],commit,data): done.append(data['command_id'])
-  with self.db() as d:d.execute("INSERT INTO relay_meta VALUES('head',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(head,))
+   self.save(data['command_id'],commit,'DISCOVERED',data) if not self.row(data['command_id']) else None
+  with self.db() as d:d.execute("INSERT INTO relay_meta VALUES('head',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(head,)); pending=d.execute("SELECT command_id,source_commit,command_json FROM relay_commands WHERE lifecycle IN ('DISCOVERED','SUBMITTED','RESULT_READY')").fetchall()
+  for command_id,commit,raw in pending:
+   if self.resume(command_id,commit,json.loads(raw)): done.append(command_id)
   return done
 
 def github_actor_lookup(commit):
