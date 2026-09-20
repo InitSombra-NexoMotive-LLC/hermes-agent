@@ -44,10 +44,11 @@ class StatusRelay:
   actor=self.actor_lookup(commit)
   if not isinstance(actor,dict) or actor.get('login')!='InitSombra-NexoMotive-LLC' or actor.get('id')!=239685310: raise RuntimeError('ACTOR_VERIFICATION_FAILED')
  def _result(self,command_id):
-  status=self.socket.request({'verb':'command-status','command_id':command_id})
-  if status.get('status')!='OK': raise RuntimeError('STATUS_UNAVAILABLE')
-  if status.get('state') not in {'COMPLETED','FAILED'}: raise RuntimeError('STATUS_PENDING')
-  return {k:status.get(k) for k in SAFE_RESULT}
+  for _ in range(self.c.retries):
+   status=self.socket.request({'verb':'command-status','command_id':command_id})
+   if status.get('status')=='OK' and status.get('state') in {'COMPLETED','FAILED'}: return {k:status.get(k) for k in SAFE_RESULT}
+   time.sleep(min(1,self.c.timeout))
+  raise RuntimeError('STATUS_PENDING')
  def _publish(self,command_id,result):
   target=self.c.workspace/'control-inbox/results'/f'{command_id}.json'
   if target.exists(): raise RuntimeError('RESULT_EXISTS')
@@ -72,6 +73,7 @@ class StatusRelay:
     if not all(s=='A' and p.startswith('control-inbox/results/') for s,p in changes): raise RuntimeError('UNVERIFIED_TRANSPORT_CHANGE')
     continue
    if len(changes)!=1 or len(command_changes)!=1 or changes[0][0]!='A' or '/' in command_changes[0].removeprefix('control-inbox/commands/'): raise RuntimeError('INVALID_COMMAND_COMMIT')
+   if not self._git('ls-tree',commit,'--',command_changes[0]).startswith('100644 '): raise RuntimeError('INVALID_COMMAND_COMMIT')
    self._verify_actor(commit); raw=self._git('show',f'{commit}:{command_changes[0]}')
    if len(raw.encode())>16384: raise RuntimeError('INVALID_COMMAND')
    try: data=self.validate_command(json.loads(raw))
