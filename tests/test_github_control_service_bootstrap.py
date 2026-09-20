@@ -27,3 +27,8 @@ def test_unknown_relay_error_exits_nonzero():assert code(RelayError('OTHER'))==1
 def test_unexpected_exception_exits_nonzero():assert code(ValueError())==1
 def test_logs_contain_only_safe_outcome_codes(caplog):run_service_iteration(R(RelayError('REMOTE_ADVANCED')));assert 'REMOTE_ADVANCED' in caplog.text and 'Traceback' not in caplog.text
 def test_systemd_prevents_restart_for_exit_73():assert 'RestartPreventExitStatus=73' in open('systemd/hermes-github-control-relay.service').read()
+def test_systemd_service_path_resolves_gh_without_weakening_hardening():
+ import subprocess
+ text=open('systemd/hermes-github-control-relay.service').read();path='/usr/bin:/bin:/home/rodrigo/.local/bin'
+ assert f'Environment=PATH={path}' in text and path.split(':')[:2]==['/usr/bin','/bin'] and 'RestartPreventExitStatus=73' in text
+ assert subprocess.run(['sh','-c','command -v gh'],env={'PATH':path},text=True,stdout=subprocess.PIPE,check=True).stdout.strip()=='/home/rodrigo/.local/bin/gh'
