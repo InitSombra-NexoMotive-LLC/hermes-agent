@@ -5,10 +5,13 @@ class CommandLedger:
  def __init__(self,path):
   self.path=Path(path);self.path.parent.mkdir(parents=True,exist_ok=True)
   with self._db() as d:
+   d.execute('BEGIN IMMEDIATE')
    d.execute('CREATE TABLE IF NOT EXISTS github_control_commands(command_id TEXT PRIMARY KEY,state TEXT NOT NULL,payload TEXT NOT NULL,reason TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)')
    cols={x[1] for x in d.execute('PRAGMA table_info(github_control_commands)')}
    for n,t in {'worker_id':'TEXT','workstream':'TEXT','completed_at':'TEXT','sanitized_result':'TEXT','result_digest':'TEXT','result_truncated':'INTEGER NOT NULL DEFAULT 0'}.items():
-    if n not in cols:d.execute(f'ALTER TABLE github_control_commands ADD COLUMN {n} {t}')
+    if n not in cols:
+     d.execute(f'ALTER TABLE github_control_commands ADD COLUMN {n} {t}')
+     cols={x[1] for x in d.execute('PRAGMA table_info(github_control_commands)')}
  def _db(self):return sqlite3.connect(self.path,timeout=5)
  def accept(self,p):
   t=datetime.now(timezone.utc).isoformat()

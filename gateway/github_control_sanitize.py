@@ -2,7 +2,7 @@
 from __future__ import annotations
 import hashlib,re
 MAX_RESULT_CHARS=4096
-_SECRET=re.compile(r'(?i)(bearer\s+\S+|gh[opsu]_[A-Za-z0-9_]+|(?:password|secret|token|authorization|api[_-]?key)\s*[=:]\s*\S+)')
+_SECRET=re.compile(r'(?i)(bearer\s+\S+|gh[ropsu]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|(?:password|secret|token|authorization|api[_-]?key)\s*[=:]\s*\S+)')
 _PRIVATE=re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY-----')
 _SESSION=re.compile(r'agent:[^\s]+|telegram:\S+')
 def sanitize_result(value):
