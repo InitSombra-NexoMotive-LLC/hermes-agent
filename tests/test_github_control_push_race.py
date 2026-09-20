@@ -39,3 +39,16 @@ def test_next_poll_validates_fast_forward_before_publish(tmp_path):
  git('fetch','origin',cwd=comp);history=git('log','--format=%H','origin/control/nvidia-command-inbox',cwd=comp)
  assert later_sha in history and git('show','origin/control/nvidia-command-inbox:control-inbox/results/race.json',cwd=comp)
  assert history.count(later_sha)==1
+
+def test_invalid_intervening_commit_prevents_result_push(tmp_path):
+ relay,comp,result,bare=setup(tmp_path);(comp/'unauthorized-marker.txt').write_text('no');git('add','.',cwd=comp);git('-c','user.name=c','-c','user.email=c@x','commit','-m','unauthorized',cwd=comp);bad=git('rev-parse','HEAD',cwd=comp);git('push','origin','HEAD:control/nvidia-command-inbox',cwd=comp)
+ with pytest.raises(RelayError) as advanced:relay.publish('race',result)
+ assert advanced.value.code=='REMOTE_ADVANCED' and relay.row('race')[1]=='RESULT_READY'
+ calls=[];relay.socket=type('Socket',(),{'request':lambda self,payload:calls.append(payload)})()
+ relay.publish=lambda *args:calls.append('publish')
+ with pytest.raises(RelayError) as rejected:relay.poll_once()
+ assert rejected.value.code=='UNKNOWN_RESULT_COMMIT' and rejected.value.code in __import__('gateway.github_control_relay',fromlist=['PERMANENT']).PERMANENT
+ assert calls==[] and relay.row('race')[1]=='RESULT_READY'
+ with relay.db() as d: assert d.execute("SELECT value FROM relay_meta WHERE key='head'").fetchone() is None
+ git('fetch','origin',cwd=comp);assert bad in git('log','--format=%H','origin/control/nvidia-command-inbox',cwd=comp)
+ with pytest.raises(subprocess.CalledProcessError):git('show','origin/control/nvidia-command-inbox:control-inbox/results/race.json',cwd=comp)
