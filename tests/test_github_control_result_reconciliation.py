@@ -32,12 +32,16 @@ def test_result_commit_wrong_mode_is_rejected(tmp_path):
 def test_rewritten_history_rejected_before_command_resume(tmp_path,monkeypatch):
  relay,data,sha=_result_relay(tmp_path);relay.save(data['command_id'],'a'*40,'PUBLISHED',data,published=sha)
  pending=command('pending');relay.save('pending','b'*40,'DISCOVERED',pending);relay.save('pending','b'*40,'SUBMITTED',pending)
- calls=[];relay.socket.request=lambda payload:calls.append(payload) or {'status':'OK'};monkeypatch.setattr(relay,'prepare',lambda:'new');monkeypatch.setattr(relay,'ancestor',lambda a,b:False)
- with pytest.raises(RelayError):relay.poll_once()
- assert calls==[] and relay.row('pending')[1]=='SUBMITTED'
+ calls=[];published=[];relay.socket.request=lambda payload:calls.append(payload) or {'status':'OK'};monkeypatch.setattr(relay,'prepare',lambda:'new');monkeypatch.setattr(relay,'ancestor',lambda a,b:False);monkeypatch.setattr(relay,'publish',lambda *args:published.append(args))
+ with pytest.raises(RelayError) as raised:relay.poll_once()
+ assert raised.value.code=='UNTRUSTED_TRANSPORT_HEAD' and calls==[] and published==[] and relay.row('pending')[1]=='SUBMITTED'
 def test_poll_resumes_pending_after_transport_validation(tmp_path,monkeypatch):
  relay,data,sha=_result_relay(tmp_path);relay.save(data['command_id'],'a'*40,'PUBLISHED',data,published=sha)
  pending=command('pending');relay.save('pending','b'*40,'DISCOVERED',pending);relay.save('pending','b'*40,'SUBMITTED',pending)
- trace=[];monkeypatch.setattr(relay,'prepare',lambda:trace.append('fetch') or sha);monkeypatch.setattr(relay,'ancestor',lambda a,b:trace.append('ancestry') or True);monkeypatch.setattr(relay,'git',lambda *args: '' if args[0]=='rev-list' else sha)
- relay.socket.request=lambda payload:trace.append(payload['verb']) or {'status':'OK','state':'RUNNING'}
- assert relay.poll_once()==[] and trace.index('ancestry')<trace.index('command-status') and relay.row('pending')[1]=='SUBMITTED'
+ with relay.db() as d:d.execute("INSERT INTO relay_meta VALUES('head',?)",(sha,))
+ trace=[];monkeypatch.setattr(relay,'prepare',lambda:trace.append('fetch') or sha);monkeypatch.setattr(relay,'ancestor',lambda a,b:trace.append('ancestry') or True)
+ statuses=[{'status':'OK','state':'RUNNING'},{'status':'OK','state':'COMPLETED','command_id':'pending','worker_id':'nvidia-control','workstream':'CONTROL_PLANE','reason':None,'created_at':'t','updated_at':'t','completed_at':'t','sanitized_result':'safe','result_digest':'digest','result_truncated':False}]
+ def request(payload):trace.append(payload['verb']);return statuses.pop(0)
+ published=[];relay.socket.request=request;monkeypatch.setattr(relay,'publish',lambda *args:trace.append('publish') or published.append(args) or 'p'*40)
+ assert relay.poll_once()==[] and relay.row('pending')[1]=='SUBMITTED' and trace.index('ancestry')<trace.index('command-status') and 'submit-command' not in trace and 'publish' not in trace
+ trace.clear();assert relay.poll_once()==['pending'] and relay.row('pending')[1]=='PUBLISHED' and trace.index('ancestry')<trace.index('command-status')<trace.index('publish') and len(published)==1 and 'submit-command' not in trace
