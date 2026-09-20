@@ -21,9 +21,21 @@ def test_remote_fast_forward_returns_remote_advanced(tmp_path):
  git('fetch','origin',cwd=comp)
  with pytest.raises(subprocess.CalledProcessError):git('show','HEAD:control-inbox/results/race.json',cwd=comp)
 def test_next_poll_validates_fast_forward_before_publish(tmp_path):
- relay,comp,result,bare=setup(tmp_path);advanced=advance(comp)
- with pytest.raises(RelayError):relay.publish('race',result)
- relay.git('fetch','origin',relay.c.branch);relay.git('checkout','--detach','FETCH_HEAD');calls=[];original=relay.publish
- relay.publish=lambda command_id,value:calls.append('publish') or original(command_id,value)
- # The caller must validate the fast-forward before retrying publication; this test proves the remote head exists.
- assert relay.ancestor(advanced,'FETCH_HEAD') and calls==[]
+ relay,comp,result,bare=setup(tmp_path)
+ later={'protocol_version':1,'command_id':'later','source':'github-control','worker_id':'nvidia-control','workstream':'CONTROL_PLANE','task_id':'x','command_type':'STATUS','instructions':'status'}
+ path=comp/'control-inbox/commands';path.mkdir(parents=True);(path/'later.json').write_text(json.dumps(later));git('add','.',cwd=comp);git('-c','user.name=c','-c','user.email=c@x','commit','-m','later',cwd=comp);later_sha=git('rev-parse','HEAD',cwd=comp);git('push','origin','HEAD:control/nvidia-command-inbox',cwd=comp)
+ with pytest.raises(RelayError) as raised:relay.publish('race',result)
+ assert raised.value.code=='REMOTE_ADVANCED' and relay.row('race')[1]=='RESULT_READY'
+ trace=[];relay.actor_lookup=lambda sha:trace.append('actor') or {'login':'InitSombra-NexoMotive-LLC','id':239685310}
+ class Sock:
+  def request(self,payload):
+   trace.append(payload['verb']+':'+payload['command_id'])
+   if payload['verb']=='submit-command':return {'status':'ACCEPTED'}
+   return {'status':'OK','state':'RUNNING'}
+ relay.socket=Sock();original=relay.publish
+ relay.publish=lambda command_id,value:trace.append('publish') or original(command_id,value)
+ assert relay.poll_once()==['race'] and relay.row('race')[1]=='PUBLISHED' and relay.row('later')[1]=='SUBMITTED'
+ assert trace.index('actor')<trace.index('publish') and trace.count('publish')==1
+ git('fetch','origin',cwd=comp);history=git('log','--format=%H','origin/control/nvidia-command-inbox',cwd=comp)
+ assert later_sha in history and git('show','origin/control/nvidia-command-inbox:control-inbox/results/race.json',cwd=comp)
+ assert history.count(later_sha)==1
