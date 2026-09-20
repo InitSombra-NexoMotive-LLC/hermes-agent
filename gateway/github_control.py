@@ -16,10 +16,9 @@ class SubmitCommand:
   if not isinstance(p,dict) or not REQUIRED<=p.keys() or not isinstance(p['instructions'],str) or len(p['instructions'])>8000:return {'status':'INVALID'}
   if p['source']!='github-control' or p['worker_id']!='nvidia-control' or p['workstream']!='CONTROL_PLANE':return {'command_id':p['command_id'],'status':'UNAUTHORIZED'}
   if p['command_type'] not in ALLOWED:return {'command_id':p['command_id'],'status':'INVALID_COMMAND'}
-  if self.ledger.state(p['command_id']) in {'ACCEPTED','QUEUED','RUNNING','DELIVERED','COMPLETED','FAILED'}:return {'command_id':p['command_id'],'status':'DUPLICATE'}
   try:event=build_worker_control_event(self.registry,p)
   except BindError as e:return {'command_id':p['command_id'],'status':str(e)}
-  self.ledger.accept(p)
+  if not self.ledger.accept(p):return {'command_id':p['command_id'],'status':'DUPLICATE'}
   try:
    if not self.ledger.transition(p['command_id'],'QUEUED',('ACCEPTED',)):raise RuntimeError()
    self.schedule(event,p,self.ledger);return {'command_id':p['command_id'],'status':'ACCEPTED','accepted_at':now()}

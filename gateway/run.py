@@ -5142,19 +5142,29 @@ async def _start_gateway_start_control_socket(runner):
             ledger = CommandLedger(state_path)
             def _schedule(event, command, ledger):
                 async def _deliver():
-                    ledger.transition(command['command_id'], "RUNNING", ("QUEUED",))
+                    if not ledger.transition(command['command_id'], "RUNNING", ("QUEUED",)):
+                        ledger.fail(command['command_id'], 'INVALID_LIFECYCLE_STATE')
+                        return
                     try:
-                        ledger.transition(command['command_id'], "DELIVERED", ("RUNNING",))
+                        if not ledger.transition(command['command_id'], "DELIVERED", ("RUNNING",)):
+                            ledger.fail(command['command_id'], 'INVALID_LIFECYCLE_STATE')
+                            return
                         result = await runner._handle_message(event)
+                    except Exception:
+                        ledger.fail(command['command_id'], 'EXECUTION_FAILED')
+                        raise
+                    try:
                         from gateway.github_control_sanitize import sanitize_result
-                        if not ledger.complete(command['command_id'], sanitize_result(result)):
-                            ledger.fail(command['command_id'], 'RESULT_PERSISTENCE_FAILED')
-                            raise RuntimeError('RESULT_PERSISTENCE_FAILED')
-                    except ValueError:
+                        sanitized = sanitize_result(result)
+                    except Exception:
                         ledger.fail(command['command_id'], 'RESULT_SANITIZATION_FAILED')
                         raise
-                    except Exception as exc:
-                        ledger.fail(command['command_id'], type(exc).__name__)
+                    try:
+                        if not ledger.complete(command['command_id'], sanitized):
+                            ledger.fail(command['command_id'], 'RESULT_PERSISTENCE_FAILED')
+                            raise RuntimeError('RESULT_PERSISTENCE_FAILED')
+                    except Exception:
+                        ledger.fail(command['command_id'], 'RESULT_PERSISTENCE_FAILED')
                         raise
                 future = asyncio.run_coroutine_threadsafe(_deliver(), _main_loop)
                 def _observe(done):
